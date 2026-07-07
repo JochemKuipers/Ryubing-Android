@@ -49,7 +49,11 @@ val publishLibRyubing = tasks.register<Exec>("publishLibRyubing") {
     )
 
     doLast {
-        val produced = artifacts.walkTopDown().firstOrNull { it.name == "libryubing.so" }
+        // NativeAOT names the shared library after the assembly (LibRyubing.so),
+        // so match case-insensitively before copying to the lowercase libryubing.so
+        // that Android's System.loadLibrary/JNA expects.
+        val produced = artifacts.walkTopDown()
+            .firstOrNull { it.isFile && it.name.equals("libryubing.so", ignoreCase = true) }
             ?: throw GradleException("libryubing.so not found after publish under $artifacts")
         produced.copyTo(File(jniLibsArm64, "libryubing.so"), overwrite = true)
         logger.lifecycle("Copied ${produced.path} -> ${jniLibsArm64}/libryubing.so")

@@ -79,6 +79,12 @@
   <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-bionic-arm64'">
     <LinkerArg Include="-llog" />
     <LinkerArg Include="-Wl,--undefined-version" />
+    <!-- NativeAOT emits no DT_SONAME, and the output is named after the assembly
+         (LibRyubing.so) before being copied to libryubing.so. Force the soname to the
+         lowercase runtime name so consumers (libryubingjni.so) record a DT_NEEDED of
+         'libryubing.so' rather than the absolute link path, and so the Android loader
+         resolves it from jniLibs at runtime. -->
+    <LinkerArg Include="-Wl,-soname,libryubing.so" />
   </ItemGroup>
 
 </Project>

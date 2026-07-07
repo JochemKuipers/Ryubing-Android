@@ -13,8 +13,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #   * (optionally) load a custom Vulkan driver (Turnip) via adrenotools
 #   * hold the JavaVM for any reverse-JNI needs
 #
-# It exposes a function pointer (createVulkanSurface) that Kotlin passes to
-# libryubing.so via `ryubing_set_surface_provider`, keeping JNI out of the AOT image.
+# It owns a surface factory and hands it to libryubing.so by calling the core export
+# `ryubing_set_surface_provider` directly (see registerSurfaceProvider in ryubingjni.cpp),
+# so this shim links against libryubing.so at build time.
 #
 
 add_library(ryubingjni SHARED
@@ -28,6 +29,15 @@ target_compile_definitions(ryubingjni PRIVATE
 find_library(log-lib log)
 find_library(android-lib android)
 find_library(vulkan-lib vulkan)
+
+# --- Link against the NativeAOT core (libryubing.so) ---
+# The core is published into the app's jniLibs by the :libryubing:assemble Gradle task,
+# which runs as a preBuild dependency, so the .so is present before this build links.
+# The shim calls core exports directly (e.g. ryubing_set_surface_provider), making this
+# a hard link-time dependency; at runtime the Android loader resolves it from jniLibs.
+set(RYUBING_CORE "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libryubing.so")
+add_library(ryubing SHARED IMPORTED)
+set_target_properties(ryubing PROPERTIES IMPORTED_LOCATION "${RYUBING_CORE}")
 
 # --- Optional: adrenotools for custom Vulkan (Turnip) driver loading ---
 # Provide the checkout via -DADRENOTOOLS_DIR=... (git submodule under libraries/).
@@ -45,6 +55,7 @@ else()
 endif()
 
 target_link_libraries(ryubingjni
+    ryubing
     ${log-lib}
     ${android-lib}
     ${vulkan-lib}
