@@ -39,9 +39,9 @@ fun EmulationScreen(
                             scope.launch {
                                 session.initialize()
                                 session.applyConfig(config)
-                                // SAF content:// URIs are resolved to a path/fd by the
-                                // managed loader; pass the URI string through for now.
-                                session.start(game.uri.toString())
+                                // The session resolves the game's SAF content:// URI to an
+                                // openable file descriptor before handing it to the core.
+                                session.start(game)
                             }
                         }
 

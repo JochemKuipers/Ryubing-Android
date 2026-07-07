@@ -36,6 +36,7 @@ fun RyubingApp(
 
         is Screen.Settings -> SettingsScreen(
             repository = settingsRepository,
+            session = session,
             onBack = { screen = Screen.Library },
         )
 

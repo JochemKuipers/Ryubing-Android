@@ -24,7 +24,7 @@ class MainActivity : ComponentActivity() {
 
         val gameRepo = GameRepository(applicationContext)
         val settingsRepo = SettingsRepository(applicationContext)
-        val session = EmulationSession(filesDir.absolutePath)
+        val session = EmulationSession(filesDir.absolutePath, contentResolver)
 
         setContent {
             RyubingTheme {

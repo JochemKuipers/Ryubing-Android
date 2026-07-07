@@ -1,20 +1,33 @@
 package org.ryubing.android.emu
 
+import android.content.ContentResolver
+import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.view.Surface
 import org.ryubing.android.RyubingNative
 import org.ryubing.android.data.EmulatorConfig
+import org.ryubing.android.data.GameEntry
 import org.ryubing.android.input.SwitchButton
+import java.io.File
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * High-level glue over the [RyubingNative] C ABI. Owns the current button state and
  * forwards lifecycle + input to libryubing.so. One instance per running title.
  */
-class EmulationSession(private val appDataPath: String) {
+class EmulationSession(
+    private val appDataPath: String,
+    private val contentResolver: ContentResolver,
+) {
 
     private val buttonState = AtomicInteger(0)
     @Volatile private var initialized = false
+
+    // The ROM is opened via SAF; the descriptor must stay open for the whole session because
+    // the core reads content from it on demand (the fd path below points at this descriptor).
+    @Volatile private var romFd: ParcelFileDescriptor? = null
 
     fun initialize() {
         if (initialized) return
@@ -35,10 +48,80 @@ class EmulationSession(private val appDataPath: String) {
     /** The SurfaceView hands us its Surface; forward it to the JNI shim. */
     fun setSurface(surface: Surface?) = RyubingNative.setSurface(surface)
 
-    fun start(gamePath: String): Boolean {
-        val ok = RyubingNative.core.ryubing_load_application(gamePath) == 1
-        if (!ok) Log.e(TAG, "Failed to load $gamePath")
+    /**
+     * Opens [game]'s SAF content URI and hands the core an openable path. Android content URIs
+     * can't be opened as filesystem paths, so we resolve the URI to a real file descriptor and
+     * pass "/proc/self/fd/N" (kept valid by holding [romFd] open). The original file name is
+     * passed alongside so the core can still detect the ROM format (the fd path has no extension).
+     */
+    fun start(game: GameEntry): Boolean {
+        closeRomFd()
+        val pfd = try {
+            contentResolver.openFileDescriptor(game.uri, "r")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to open ${game.uri}", e)
+            null
+        } ?: return false
+
+        romFd = pfd
+        val fdPath = "/proc/self/fd/${pfd.fd}"
+        val ok = RyubingNative.core.ryubing_load_application(fdPath, game.title) == 1
+        if (!ok) {
+            Log.e(TAG, "Failed to load ${game.title} ($fdPath)")
+            closeRomFd()
+        }
         return ok
+    }
+
+    private fun closeRomFd() {
+        romFd?.let { runCatching { it.close() } }
+        romFd = null
+    }
+
+    // --- System files (keys / firmware) ---
+
+    /**
+     * Copies a user-picked prod.keys into the app's private system directory and reloads the
+     * key set so it takes effect immediately (and is loaded on every subsequent launch).
+     * Blocking I/O — call off the main thread.
+     */
+    fun importProdKeys(uri: Uri): Boolean {
+        return try {
+            val systemDir = File(appDataPath, "system").apply { mkdirs() }
+            copyUriTo(uri, File(systemDir, "prod.keys"))
+            initialize()
+            RyubingNative.core.ryubing_reload_keys()
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to import prod.keys from $uri", e)
+            false
+        }
+    }
+
+    /**
+     * Installs a firmware package. The core's installer picks the format from the file extension,
+     * so we copy the SAF selection to a temp file named after [displayName] before handing over the
+     * real path. Blocking I/O (potentially hundreds of MB) — call off the main thread.
+     */
+    fun installFirmware(uri: Uri, displayName: String): Boolean {
+        initialize()
+        val ext = displayName.substringAfterLast('.', "zip").lowercase()
+        val temp = File(appDataPath, "firmware_import.$ext")
+        return try {
+            copyUriTo(uri, temp)
+            RyubingNative.core.ryubing_install_firmware(temp.absolutePath) == 1
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to install firmware from $uri", e)
+            false
+        } finally {
+            temp.delete()
+        }
+    }
+
+    private fun copyUriTo(uri: Uri, dest: File) {
+        (contentResolver.openInputStream(uri) ?: throw IOException("Cannot open $uri")).use { input ->
+            dest.outputStream().use { output -> input.copyTo(output) }
+        }
     }
 
     val isRunning: Boolean get() = initialized && RyubingNative.core.ryubing_is_running() == 1
@@ -59,11 +142,13 @@ class EmulationSession(private val appDataPath: String) {
 
     fun stop() {
         if (initialized) RyubingNative.core.ryubing_stop()
+        closeRomFd()
     }
 
     fun shutdown() {
         if (initialized) RyubingNative.core.ryubing_shutdown()
         initialized = false
+        closeRomFd()
     }
 
     private fun Boolean.toInt() = if (this) 1 else 0

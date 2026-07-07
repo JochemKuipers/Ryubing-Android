@@ -70,15 +70,31 @@ namespace LibRyubing
         }
 
         [UnmanagedCallersOnly(EntryPoint = "ryubing_load_application")]
-        public static int LoadApplication(byte* path)
+        public static int LoadApplication(byte* path, byte* displayName)
         {
             bool ok = false;
-            Guard(() => ok = AndroidHost.LoadApplication(Utf8.ToString(path) ?? string.Empty, _settings));
+            Guard(() => ok = AndroidHost.LoadApplication(
+                Utf8.ToString(path) ?? string.Empty,
+                Utf8.ToString(displayName) ?? string.Empty,
+                _settings));
             return ok ? 1 : 0;
         }
 
         [UnmanagedCallersOnly(EntryPoint = "ryubing_is_running")]
         public static int IsRunning() => AndroidHost.IsRunning ? 1 : 0;
+
+        // --- System files (keys / firmware) ---
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_reload_keys")]
+        public static void ReloadKeys() => Guard(AndroidHost.ReloadKeys);
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_install_firmware")]
+        public static int InstallFirmware(byte* path)
+        {
+            bool ok = false;
+            Guard(() => ok = AndroidHost.InstallFirmware(Utf8.ToString(path) ?? string.Empty));
+            return ok ? 1 : 0;
+        }
 
         // --- Input injection (called each frame / on input events) ---
 

@@ -1,7 +1,16 @@
 # Upstream patch queue
 
-Numbered patches here are applied to `upstream/ryubing` by `scripts/apply-patches.sh`
-using `git am`. They are the **only** sanctioned way to modify upstream source.
+Numbered patches here are applied to `upstream/ryubing`. They are the **only** sanctioned
+way to modify upstream source — the submodule itself is kept pristine at its pinned commit.
+
+Two entry points apply them:
+
+- **Build time (automatic).** The Gradle `:libryubing:applyUpstreamPatches` task resets the
+  submodule to its pinned commit and re-applies every patch with `git apply` before the
+  NativeAOT publish runs. This is cross-platform (git only, no bash) and idempotent, so the
+  `dotnet publish` always compiles the patched sources without anything being committed.
+- **Maintainer/CI.** `scripts/apply-patches.sh` applies the same files with `git am` (giving
+  each patch a commit + provenance) when preparing or validating an upstream bump.
 
 ## Rules
 
@@ -31,5 +40,7 @@ Name format: `NNNN-short-description.patch` (kept in order by `NNNN`).
 
 ## Current queue
 
-_Empty._ The port currently builds against pristine upstream; all Android logic lives
-in `src/LibRyubing` and `src/RyubingAndroid`.
+1. `0001-android-back-shared-memory-with-memfd_create-no-dev-.patch` — bionic has no
+   `/dev/shm`, so `CreateSharedMemory`'s `mkstemp("/dev/shm/...")` fails with `ENOENT` at
+   runtime. Backs shared memory with an anonymous `memfd_create` instead, guarded by
+   `#if ANDROID`. (see `docs/patch-candidates.md` → C5)

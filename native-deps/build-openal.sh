@@ -18,6 +18,9 @@ mkdir -p "$BUILD"
 
 cmake -S "$SRC" -B "$BUILD" \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+  `# OpenAL Soft 1.23.1 declares an ancient cmake_minimum_required that CMake 4.x`  \
+  `# rejects; allow it to configure under the old policy defaults.`                 \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DANDROID_ABI="$ANDROID_ABI" \
   -DANDROID_PLATFORM="android-$ANDROID_API" \
   -DCMAKE_BUILD_TYPE=Release \

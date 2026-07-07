@@ -92,10 +92,59 @@ namespace LibRyubing
         }
 
         /// <summary>
+        /// Reloads prod.keys/title.keys from the system directory so an already-initialized host
+        /// picks up freshly imported keys without a process restart.
+        /// </summary>
+        public static void ReloadKeys()
+        {
+            if (_virtualFileSystem == null)
+            {
+                Logger.Error?.Print(LogClass.Application, "ReloadKeys called before Initialize.");
+                return;
+            }
+
+            _virtualFileSystem.ReloadKeySet();
+            Logger.Notice.Print(LogClass.Application, "Reloaded key set.");
+        }
+
+        /// <summary>
+        /// Installs a firmware package into system storage. <paramref name="path"/> must be a real
+        /// file with its original extension (.zip or .xci) — the installer picks the format from the
+        /// extension, so the caller copies the SAF selection to a temp file first.
+        /// </summary>
+        public static bool InstallFirmware(string path)
+        {
+            if (_contentManager == null)
+            {
+                Logger.Error?.Print(LogClass.Application, "InstallFirmware called before Initialize.");
+                return false;
+            }
+
+            try
+            {
+                SystemVersion version = _contentManager.VerifyFirmwarePackage(path);
+                if (version == null)
+                {
+                    Logger.Error?.Print(LogClass.Application, $"'{path}' is not a valid firmware package.");
+                    return false;
+                }
+
+                _contentManager.InstallFirmware(path);
+                Logger.Notice.Print(LogClass.Application, $"Installed firmware {version.VersionString}.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error?.Print(LogClass.Application, $"Failed to install firmware '{path}': {ex}");
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Loads and starts a title. Blocks setting up state, then runs the GPU loop on a
         /// dedicated thread. Returns false if the file could not be loaded.
         /// </summary>
-        public static bool LoadApplication(string path, EmulatorSettings settings)
+        public static bool LoadApplication(string path, string displayName, EmulatorSettings settings)
         {
             if (_virtualFileSystem == null)
             {
@@ -131,7 +180,7 @@ namespace LibRyubing
             SystemVersion firmware = _contentManager.GetCurrentFirmwareVersion();
             Logger.Notice.Print(LogClass.Application, $"Firmware version: {firmware?.VersionString ?? "not installed"}");
 
-            if (!LoadByExtension(path))
+            if (!LoadByExtension(path, displayName))
             {
                 _device.Dispose();
                 _device = null;
@@ -199,7 +248,7 @@ namespace LibRyubing
                 debuggerSuspendOnStart: false,
                 customVSyncInterval: 120);
 
-        private static bool LoadByExtension(string path)
+        private static bool LoadByExtension(string path, string displayName)
         {
             try
             {
@@ -208,7 +257,12 @@ namespace LibRyubing
                     return _device.LoadCart(path);
                 }
 
-                switch (Path.GetExtension(path).ToLowerInvariant())
+                // On Android the ROM is opened via SAF, so `path` is usually an fd path
+                // (e.g. /proc/self/fd/42) with no extension. Detect the format from the
+                // original file name instead, falling back to the path for desktop-style loads.
+                string forExtension = string.IsNullOrEmpty(displayName) ? path : displayName;
+
+                switch (Path.GetExtension(forExtension).ToLowerInvariant())
                 {
                     case ".xci":
                         return _device.LoadXci(path);
@@ -223,7 +277,7 @@ namespace LibRyubing
             }
             catch (Exception ex)
             {
-                Logger.Error?.Print(LogClass.Application, $"Failed to load '{path}': {ex.Message}");
+                Logger.Error?.Print(LogClass.Application, $"Failed to load '{displayName}' ({path}): {ex.Message}");
                 return false;
             }
         }

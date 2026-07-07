@@ -30,6 +30,10 @@
     <DefineConstants>$(DefineConstants);ANDROID</DefineConstants>
     <LinkerFlavor>lld</LinkerFlavor>
     <IlcInstructionSet>armv8.2-a</IlcInstructionSet>
+    <!-- Pin the driver to the NDK clang (put on PATH by the Gradle publish task). Otherwise
+         the ILCompiler's probe can pick up an unrelated 'gcc' (e.g. msys64's) that cannot link
+         a linux-bionic ELF — this bites Windows hosts where mingw gcc is on PATH. -->
+    <CppCompilerAndLinker>clang</CppCompilerAndLinker>
   </PropertyGroup>
 
   <PropertyGroup>

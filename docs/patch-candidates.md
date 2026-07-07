@@ -77,9 +77,29 @@ Only patch if a hard-coded desktop path is discovered that ignores the base dir.
 
 ---
 
+## C5 — Shared memory on bionic (no /dev/shm)  (APPLIED — `patches/0001-*`)
+
+**File:** `src/Ryujinx.Memory/MemoryManagementUnix.cs`,
+`src/Ryujinx.Memory/MemoryManagerUnixHelper.cs`
+
+**Problem.** On non-macOS Unix, `CreateSharedMemory` creates its backing fd with
+`mkstemp("/dev/shm/Ryujinx-XXXXXX")`. Android's bionic libc has no `/dev/shm`, so `mkstemp`
+fails with `ENOENT` and the emulator throws `SystemException: No such file or directory`
+before a game can boot.
+
+**Trigger (hit).** On-device run threw from `Ryujinx.Memory.MemoryManagementUnix.CreateSharedMemory`.
+
+**Ryubing-native fix (shipped).** Under `#if ANDROID`, back the shared memory with an
+anonymous `memfd_create` (available since API 30) instead of a `/dev/shm` file, and add the
+matching `[LibraryImport("libc")] memfd_create` P/Invoke. Desktop paths are untouched.
+
+---
+
 ## Notes
 
 - Keep every future patch `#if ANDROID`-guarded (the publish sets `DefineConstants=ANDROID`)
   so upstream desktop behaviour is untouched and `git am` conflicts stay small.
 - When a candidate becomes real, generate it with `git format-patch` from the submodule and
   drop it in `patches/NNNN-*.patch`, then bump `patches_applied` in `compat/pins.json`.
+- Patches are applied automatically at build time by the Gradle `applyUpstreamPatches` task
+  (`git apply` onto the pinned submodule), so the submodule tree stays pristine in git.

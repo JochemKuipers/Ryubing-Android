@@ -46,20 +46,19 @@ PATH="$TOOLCHAIN_BIN:$PATH" ./configure \
   --disable-swscale \
   --disable-postproc \
   --disable-network \
-  --extra-cflags="-Os -fPIC -DANDROID -D__ANDROID_API__=$ANDROID_API" \
-  --extra-ldflags="-Wl,-soname,libavcodec.so"
+  --extra-cflags="-Os -fPIC -DANDROID"
 
 PATH="$TOOLCHAIN_BIN:$PATH" make -j"$(nproc)"
 PATH="$TOOLCHAIN_BIN:$PATH" make install
 
 popd >/dev/null
 
-# Install the versioned .so files under unversioned names for Android.
+# FFmpeg's android config installs unversioned .so files (SLIB_INSTALL_NAME=$(SLIBNAME),
+# no version symlinks), each already carrying its own soname, so stage them directly.
 for lib in libavcodec libavutil; do
-  real="$(find "$PREFIX/lib" -name "$lib.so.*" -type f | head -n1)"
+  real="$(find "$PREFIX/lib" -name "$lib.so" -type f | head -n1)"
   [[ -n "$real" ]] || { echo "error: $lib not built" >&2; exit 1; }
-  cp -f "$real" "$BUILD_DIR/$lib.so"
-  install_so "$BUILD_DIR/$lib.so"
+  install_so "$real"
 done
 
 echo "==> FFmpeg $FFMPEG_VERSION done."

@@ -15,14 +15,24 @@ import com.sun.jna.Native
  */
 object RyubingNative {
 
+    init {
+        // Load the JNI shim as soon as this object is referenced, so its native methods
+        // (setSurface / registerSurfaceProvider) are bound before the SurfaceView callbacks
+        // can fire. libryubingjni.so has a DT_NEEDED on libryubing.so, so the NativeAOT
+        // core is loaded alongside it by the Android linker.
+        System.loadLibrary("ryubingjni")
+    }
+
     /** JNA binding to the libryubing.so C ABI. Names match the [UnmanagedCallersOnly] EntryPoints. */
     interface Core : Library {
         fun ryubing_initialize(appDataPath: String): Int
         fun ryubing_set_memory_config(memoryConfiguration: Int, memoryManagerMode: Int)
         fun ryubing_set_system_config(language: Int, region: Int, enableDockedMode: Int, enablePtc: Int)
         fun ryubing_set_graphics_config(resScale: Float, enableShaderCache: Int, backendThreading: Int)
-        fun ryubing_load_application(path: String): Int
+        fun ryubing_load_application(path: String, displayName: String): Int
         fun ryubing_is_running(): Int
+        fun ryubing_reload_keys()
+        fun ryubing_install_firmware(path: String): Int
         fun ryubing_set_button_state(buttonMask: Int)
         fun ryubing_set_stick_state(rightStick: Int, x: Float, y: Float)
         fun ryubing_set_motion_state(ax: Float, ay: Float, az: Float, gx: Float, gy: Float, gz: Float)
@@ -31,8 +41,8 @@ object RyubingNative {
     }
 
     val core: Core by lazy {
-        // libryubingjni.so must be loaded first (it references core exports and JNI_OnLoad).
-        System.loadLibrary("ryubingjni")
+        // libryubingjni.so is already loaded in this object's init block (and pulls in
+        // libryubing.so via DT_NEEDED); JNA just binds to the already-loaded core here.
         Native.load("ryubing", Core::class.java)
     }
 
@@ -46,9 +56,10 @@ object RyubingNative {
     @JvmStatic
     external fun registerSurfaceProvider()
 
-    /** Ensures both libraries are loaded and the surface provider is wired. */
+    /** Ensures the core is bound (native libs load in init) and the surface provider is wired. */
     fun ensureLoaded() {
-        // Touching `core` triggers loadLibrary("ryubingjni") + Native.load("ryubing").
+        // The native libraries are loaded in this object's init block; touching `core`
+        // here just forces the JNA binding before we register the surface provider.
         core
         registerSurfaceProvider()
     }
