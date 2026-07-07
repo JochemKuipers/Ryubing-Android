@@ -1,0 +1,3 @@
+[submodule "upstream/ryubing"]
+	path = upstream/ryubing
+	url = /home/jochem/Ryubing
