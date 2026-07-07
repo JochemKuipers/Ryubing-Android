@@ -1,0 +1,9 @@
+<resources>
+    <!-- Base theme; the Compose UI supplies the real Material3 styling. A dark
+         splash-friendly background avoids a white flash before Compose loads. -->
+    <style name="Theme.Ryubing" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ryubing_background</item>
+        <item name="android:statusBarColor">@color/ryubing_background</item>
+        <item name="android:navigationBarColor">@color/ryubing_background</item>
+    </style>
+</resources>

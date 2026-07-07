@@ -1,0 +1,4 @@
+# Runtime native libraries are placed here (all gitignored; produced by the build):
+#   libryubing.so     -> from `:libryubing:publishLibRyubing` (dotnet publish, NativeAOT)
+#   libryubingjni.so  -> built by CMake/AGP from src/main/cpp
+#   libcrypto.so/libssl.so, libopenal.so, FFmpeg .so -> from native-deps/ scripts

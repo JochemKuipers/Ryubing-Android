@@ -1,0 +1,35 @@
+# .NET / NativeAOT
+bin/
+obj/
+artifacts/
+*.user
+publish/
+
+# Gradle / Android
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Native deps build output (large binaries, produced by native-deps scripts)
+native-deps/build/
+native-deps/download/
+src/RyubingAndroid/app/src/main/jniLibs/**/*.so
+
+# IDE
+.idea/
+.vs/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,84 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    LibRyubing: the Android "headless host" for Ryubing.
+
+    Produces libryubing.so, a NativeAOT shared library for the linux-bionic-arm64
+    runtime. It references the UNMODIFIED upstream emulation projects (under
+    ../../upstream/ryubing/src) and exposes a small C ABI (see LibRyubing.Native.cs)
+    that the Kotlin/Compose app calls through JNA.
+
+    This project intentionally does NOT reference the Avalonia GUI project
+    (upstream/ryubing/src/Ryujinx). The host lifecycle is modeled on Ryubing's own
+    HeadlessRyujinx (src/Ryujinx/Headless) rather than copied from any other fork.
+  -->
+
+  <PropertyGroup>
+    <!-- Matches upstream/ryubing/Directory.Build.props (net10.0) so project refs are compatible. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RuntimeIdentifiers>linux-bionic-arm64</RuntimeIdentifiers>
+    <!-- Ryubing keeps crypto data etc. in an external base dir; on Android we always
+         force that so all state lives under the app's storage. -->
+    <DefineConstants>$(DefineConstants);FORCE_EXTERNAL_BASE_DIR</DefineConstants>
+  </PropertyGroup>
+
+  <!-- Android / bionic-specific AOT + link configuration. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'linux-bionic-arm64'">
+    <DefineConstants>$(DefineConstants);ANDROID</DefineConstants>
+    <LinkerFlavor>lld</LinkerFlavor>
+    <IlcInstructionSet>armv8.2-a</IlcInstructionSet>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PublishAot>true</PublishAot>
+    <PublishAotUsingRuntimePack>true</PublishAotUsingRuntimePack>
+    <NativeLib Condition="'$(RuntimeIdentifier)' == 'linux-bionic-arm64'">Shared</NativeLib>
+    <!-- The [UnmanagedCallersOnly] entry points are defined manually; the managed
+         entry point (Main) is only used for the non-bionic sanity build. -->
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <Optimize>true</Optimize>
+    <OptimizationPreference>Speed</OptimizationPreference>
+    <StripSymbols>true</StripSymbols>
+  </PropertyGroup>
+
+  <!-- Reference the unmodified upstream emulation core. HLE transitively pulls in
+       ARMeilleure, Cpu, Memory, Horizon, Graphics.Gpu/GAL, Audio, etc. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\upstream\ryubing\src\Ryujinx.HLE\Ryujinx.HLE.csproj" />
+    <ProjectReference Include="..\..\upstream\ryubing\src\Ryujinx.Graphics.Vulkan\Ryujinx.Graphics.Vulkan.csproj" />
+    <ProjectReference Include="..\..\upstream\ryubing\src\Ryujinx.Graphics.Gpu\Ryujinx.Graphics.Gpu.csproj" />
+    <ProjectReference Include="..\..\upstream\ryubing\src\Ryujinx.Graphics.GAL\Ryujinx.Graphics.GAL.csproj" />
+    <ProjectReference Include="..\..\upstream\ryubing\src\Ryujinx.Audio.Backends.OpenAL\Ryujinx.Audio.Backends.OpenAL.csproj" />
+    <ProjectReference Include="..\..\upstream\ryubing\src\Ryujinx.Common\Ryujinx.Common.csproj" />
+    <ProjectReference Include="..\..\upstream\ryubing\src\Ryujinx.Input\Ryujinx.Input.csproj" />
+  </ItemGroup>
+
+  <!-- LibRyubing sits outside the upstream tree, so Central Package Management is off
+       here and we pin versions inline. Keep Silk.NET.Vulkan in sync with
+       upstream/ryubing/Directory.Packages.props. -->
+  <ItemGroup>
+    <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.23.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <RdXmlFile Include="rd.xml" />
+  </ItemGroup>
+
+  <!-- Android needs logcat; the .NET 8 bionic version-script workaround is applied
+       for older NDKs (see dotnet/runtime#92272). -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-bionic-arm64'">
+    <LinkerArg Include="-llog" />
+    <LinkerArg Include="-Wl,--undefined-version" />
+  </ItemGroup>
+
+</Project>

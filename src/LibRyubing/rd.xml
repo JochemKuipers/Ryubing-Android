@@ -1,0 +1,34 @@
+<!--
+  NativeAOT runtime-directives (trimming roots) for LibRyubing.
+
+  The emulator relies on reflection in several places (HLE service dispatch,
+  Horizon IPC, shader/JSON serialization). NativeAOT trims aggressively, so we
+  root the assemblies that reflect over their own types here.
+
+  Grow this file whenever a `dotnet publish -r linux-bionic-arm64` run trims
+  something the emulator needs at runtime (symptoms: MissingMethodException,
+  NotSupportedException from reflection, or empty service tables). Prefer rooting
+  the narrowest assembly/namespace that fixes the failure.
+-->
+<Directives xmlns="http://schemas.microsoft.com/netfx/2013/01/metadata">
+  <Application>
+    <!-- HLE + Horizon services are discovered/dispatched via reflection. -->
+    <Assembly Name="Ryujinx.HLE" Dynamic="Required All" />
+    <Assembly Name="Ryujinx.Horizon" Dynamic="Required All" />
+    <Assembly Name="Ryujinx.Horizon.Common" Dynamic="Required All" />
+
+    <!-- GPU shader translation + GAL enums are used from generated/serialized code. -->
+    <Assembly Name="Ryujinx.Graphics.Gpu" Dynamic="Required All" />
+    <Assembly Name="Ryujinx.Graphics.GAL" />
+    <Assembly Name="Ryujinx.Graphics.Shader" />
+
+    <!-- CPU translation cache + native interface. -->
+    <Assembly Name="ARMeilleure" Dynamic="Required All" />
+
+    <!-- Configuration + logging types are (de)serialized via System.Text.Json. -->
+    <Assembly Name="Ryujinx.Common" />
+
+    <!-- This library's own managed callbacks invoked from native code. -->
+    <Assembly Name="LibRyubing" Dynamic="Required All" />
+  </Application>
+</Directives>

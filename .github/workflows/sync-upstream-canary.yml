@@ -1,0 +1,68 @@
+name: Sync upstream canary
+
+# Weekly canary: pull the latest upstream Ryubing, re-apply the Android patch queue,
+# and smoke-build the emulator core. This is the early-warning system for upstream
+# changes that break the port — it opens/refreshes a PR rather than pushing to main.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Upstream ref to sync to (tag/branch/commit)"
+        required: false
+        default: "master"
+
+concurrency:
+  group: sync-upstream-canary
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: upstream/ryubing/global.json
+
+      - name: Sync submodule + re-apply patches (no build)
+        id: sync
+        run: |
+          scripts/sync-upstream.sh "${{ github.event.inputs.ref || 'master' }}" --no-build
+          echo "commit=$(git -C upstream/ryubing rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "describe=$(git -C upstream/ryubing describe --tags 2>/dev/null || git -C upstream/ryubing rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke build LibRyubing (host RID)
+        id: smoke
+        continue-on-error: true
+        run: dotnet build src/LibRyubing/LibRyubing.csproj -c Release
+
+      - name: Update pins
+        run: scripts/pin-upstream.sh
+
+      - name: Open/update sync PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: canary/upstream-sync
+          title: "chore: sync upstream to ${{ steps.sync.outputs.describe }}"
+          commit-message: "chore: bump upstream to ${{ steps.sync.outputs.describe }}"
+          body: |
+            Automated weekly upstream canary.
+
+            - Upstream: `${{ steps.sync.outputs.describe }}` (`${{ steps.sync.outputs.commit }}`)
+            - Patch queue re-applied by `scripts/apply-patches.sh`.
+            - LibRyubing smoke build: **${{ steps.smoke.outcome }}**.
+
+            If the smoke build failed, an upstream change likely broke the port — see the
+            log and record it under `known_breakages` in `compat/pins.json`.
+          labels: |
+            upstream-sync
+            automated

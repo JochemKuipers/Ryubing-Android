@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Ryubing</string>
+    <string name="library_title">Games</string>
+    <string name="settings_title">Settings</string>
+    <string name="drivers_title">GPU Drivers</string>
+    <string name="add_games_folder">Add games folder</string>
+    <string name="no_games">No games yet. Add a folder containing your dumps.</string>
+    <string name="import_driver">Import driver (.zip)</string>
+    <string name="system_driver">System driver</string>
+</resources>
