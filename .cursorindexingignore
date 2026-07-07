@@ -1,0 +1,3 @@
+# Vendored upstream submodule — modified only via patches/. Keep it out of
+# Cursor's codebase index so it isn't analyzed, without blocking access to it.
+upstream/

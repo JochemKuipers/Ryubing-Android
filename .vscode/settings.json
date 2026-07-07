@@ -1,0 +1,18 @@
+{
+  // The upstream/ryubing submodule is vendored source we only touch via patches.
+  // Keep it visible in the Explorer, but keep the editor from indexing, watching,
+  // or running analysis/linting over it.
+  "search.exclude": {
+    "**/upstream": true
+  },
+  "files.watcherExclude": {
+    "**/upstream/**": true
+  },
+  "search.followSymlinks": false,
+
+  // Scope C#/.NET diagnostics to files you actually open, so the whole
+  // upstream tree isn't analyzed in the background.
+  "dotnet.backgroundAnalysis.analyzerDiagnosticsScope": "openFiles",
+  "dotnet.backgroundAnalysis.compilerDiagnosticsScope": "openFiles",
+  "omnisharp.enableRoslynAnalyzers": false
+}
