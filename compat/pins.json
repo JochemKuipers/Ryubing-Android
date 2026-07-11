@@ -4,8 +4,14 @@
   "upstream_branch": "master",
   "upstream_tag": "Canary-1.3.333-1-g6953128ff",
   "upstream_commit": "6953128ff2f04dadde7449398a66e4635d2f9e7d",
-  "patches_applied": 1,
+  "patches_applied": 3,
   "known_breakages": [],
   "smoke_tests_passed": [],
-  "notes": "0001: memfd_create shared memory on bionic (no /dev/shm). Applied at build time by :libryubing:applyUpstreamPatches; submodule left pristine at the pinned commit."
+  "notes": [
+    "0001: memfd_create shared memory on bionic (no /dev/shm)",
+    "0002: host-no-mirror MM when mirrored 39-bit reservation fails (Kenji-NX path)",
+    "0003: disable sparse LightningJit address tables on bionic",
+    "LibRyubing sets PlatformInfo.IsBionic at init",
+    "Patches applied at build time by :libryubing:applyUpstreamPatches; submodule left pristine at the pinned commit."
+  ]
 }
