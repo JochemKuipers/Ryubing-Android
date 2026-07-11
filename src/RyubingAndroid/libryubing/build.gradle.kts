@@ -34,6 +34,8 @@ fun detectNdkToolchain(): String {
         }
         System.getenv("ANDROID_HOME")?.let { add(File(it)) }
         System.getenv("ANDROID_SDK_ROOT")?.let { add(File(it)) }
+        // Matches .vscode/tasks.json and common WSL installs when env vars are unset.
+        add(File("/opt/android-sdk"))
     }
     for (sdk in sdkRoots) {
         val ndkRoot = File(sdk, "ndk")
@@ -136,14 +138,19 @@ val publishLibRyubing = tasks.register<Exec>("publishLibRyubing") {
     doFirst {
         jniLibsArm64.mkdirs()
         if (ndkToolchain.isBlank()) {
-            logger.warn(
+            throw GradleException(
                 "No usable NDK LLVM toolchain found (checked ryubing.ndk.toolchain, local.properties " +
-                    "sdk.dir, ANDROID_HOME, ANDROID_SDK_ROOT). `dotnet publish -r linux-bionic-arm64` " +
-                    "needs the NDK's clang/ld.lld on PATH; set ryubing.ndk.toolchain to the toolchain " +
-                    "'bin' for this OS, or install the NDK via the Android SDK."
+                    "sdk.dir, ANDROID_HOME, ANDROID_SDK_ROOT, /opt/android-sdk). " +
+                    "`dotnet publish -r linux-bionic-arm64` needs the NDK's clang/ld.lld on PATH; " +
+                    "set ryubing.ndk.toolchain to the toolchain 'bin' for this OS, or install the NDK " +
+                    "via the Android SDK."
             )
         } else {
             logger.lifecycle("Using NDK toolchain: $ndkToolchain")
+            val clang = File(ndkToolchain, if (OperatingSystem.current().isWindows) "clang.exe" else "clang")
+            if (!clang.isFile) {
+                throw GradleException("NDK clang not found at ${clang.path}")
+            }
         }
     }
 

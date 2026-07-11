@@ -77,21 +77,34 @@ Only patch if a hard-coded desktop path is discovered that ignores the base dir.
 
 ---
 
-## C5 — Shared memory on bionic (no /dev/shm)  (APPLIED — `patches/0001-*`)
+## C5 — Shared memory on bionic (no /dev/shm)  (UPSTREAM @ `9d66a852e`)
 
 **File:** `src/Ryujinx.Memory/MemoryManagementUnix.cs`,
 `src/Ryujinx.Memory/MemoryManagerUnixHelper.cs`
 
-**Problem.** On non-macOS Unix, `CreateSharedMemory` creates its backing fd with
-`mkstemp("/dev/shm/Ryujinx-XXXXXX")`. Android's bionic libc has no `/dev/shm`, so `mkstemp`
-fails with `ENOENT` and the emulator throws `SystemException: No such file or directory`
-before a game can boot.
+**Status.** Merged upstream; removed from `patches/` when pinning `86f17d74`. Former
+`patches/0001-*`.
 
-**Trigger (hit).** On-device run threw from `Ryujinx.Memory.MemoryManagementUnix.CreateSharedMemory`.
+---
 
-**Ryubing-native fix (shipped).** Under `#if ANDROID`, back the shared memory with an
-anonymous `memfd_create` (available since API 30) instead of a `/dev/shm` file, and add the
-matching `[LibraryImport("libc")] memfd_create` P/Invoke. Desktop paths are untouched.
+## C6 — Mirrored 39-bit address-space reservation on bionic  (UPSTREAM @ `00eaa31f7`)
+
+**Files:** `src/Ryujinx.Cpu/AddressSpace.cs`,
+`src/Ryujinx.Cpu/Jit/MemoryManagerHostNoMirror.cs`,
+`src/Ryujinx.HLE/HOS/ArmProcessContextFactory.cs`
+
+**Status.** Merged upstream; removed from `patches/` when pinning `86f17d74`. Former
+`patches/0002-*`.
+
+---
+
+## C7 — Sparse JIT address tables on bionic  (UPSTREAM @ `86f17d74a` + `LibRyubing`)
+
+**Files:** `src/Ryujinx.Common/PlatformInfo.cs`, `src/Ryujinx.Cpu/AddressTable.cs`,
+`src/LibRyubing/AndroidHost.cs`
+
+**Status.** Upstream half merged at `86f17d74`; `PlatformInfo.IsBionic` is still set in
+the adapter (`AndroidHost.Initialize`). Former `patches/0003-*`.
 
 ---
 

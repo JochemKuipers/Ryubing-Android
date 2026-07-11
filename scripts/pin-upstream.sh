@@ -35,6 +35,7 @@ data.update({
 })
 data.setdefault("known_breakages", [])
 data.setdefault("smoke_tests_passed", [])
+data.setdefault("notes", [])
 with open(pins_path, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")

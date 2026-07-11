@@ -26,6 +26,8 @@ Two entry points apply them:
    (`DefineConstants=ANDROID` is set during publish) over invasive refactors.
 4. **Regenerate on conflict.** After an upstream bump, if `git am` fails, fix in the
    submodule and regenerate with `git format-patch`.
+5. **Upstream merge.** When Ryubing accepts an Android fix natively, drop the matching
+   patch from this queue and bump the pinned commit (see `compat/pins.json`).
 
 ## Generating a patch
 
@@ -40,7 +42,13 @@ Name format: `NNNN-short-description.patch` (kept in order by `NNNN`).
 
 ## Current queue
 
-1. `0001-android-back-shared-memory-with-memfd_create-no-dev-.patch` — bionic has no
-   `/dev/shm`, so `CreateSharedMemory`'s `mkstemp("/dev/shm/...")` fails with `ENOENT` at
-   runtime. Backs shared memory with an anonymous `memfd_create` instead, guarded by
-   `#if ANDROID`. (see `docs/patch-candidates.md` → C5)
+Empty as of pin `86f17d74` — the former `0001`–`0003` Android memory fixes are merged
+upstream:
+
+| Former patch | Upstream commit |
+|--------------|-----------------|
+| memfd_create shared memory | `9d66a852e` |
+| host-no-mirror MM fallback | `00eaa31f7` |
+| sparse JIT address tables off on bionic | `86f17d74a` |
+
+`LibRyubing` still sets `PlatformInfo.IsBionic` at init (adapter layer).

@@ -2,6 +2,7 @@ using LibRyubing.Input;
 using LibRyubing.Platform;
 using Ryujinx.Audio.Backends.OpenAL;
 using Ryujinx.Audio.Integration;
+using Ryujinx.Common;
 using Ryujinx.Common.Configuration;
 using Ryujinx.Common.Configuration.Multiplayer;
 using Ryujinx.Common.Logging;
@@ -60,6 +61,12 @@ namespace LibRyubing
         /// </summary>
         public static void Initialize(string appDataPath)
         {
+            PlatformInfo.IsBionic = true;
+
+            // NativeAOT on Android does not support Reflection.Emit; MacroJitCompiler uses
+            // DynamicMethod and will crash at runtime. Fall back to the interpreter instead.
+            GraphicsConfig.EnableMacroJit = false;
+
             Logger.AddTarget(new AsyncLogTargetWrapper(new AndroidLogTarget("android"), 1000));
             Logger.SetEnable(LogLevel.Info, true);
             Logger.SetEnable(LogLevel.Warning, true);

@@ -47,6 +47,10 @@ tests passed and any known breakages:
   "smoke_tests_passed": ["boot", "homebrew-render", "audio", "touch-input"],
   "known_breakages": [
     // { "since_commit": "…", "area": "gpu", "summary": "…", "workaround": "…" }
+  ],
+  "notes": [
+    // "0001: …",
+    // per-patch or release notes
   ]
 }
 ```
