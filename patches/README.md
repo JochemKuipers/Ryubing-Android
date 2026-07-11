@@ -42,13 +42,12 @@ Name format: `NNNN-short-description.patch` (kept in order by `NNNN`).
 
 ## Current queue
 
-Empty as of pin `86f17d74` — the former `0001`–`0003` Android memory fixes are merged
-upstream:
+Three patches ported from [Kenji-NX `libryujinx_bionic`](https://git.ryujinx.app/projects/Kenji-NX/src/branch/libryujinx_bionic) onto the Ryubing pin (`dc06d0de` / Canary-1.3.335). The phantom upstream commits cited in older pins never landed on Ryubing master.
 
-| Former patch | Upstream commit |
-|--------------|-----------------|
-| memfd_create shared memory | `9d66a852e` |
-| host-no-mirror MM fallback | `00eaa31f7` |
-| sparse JIT address tables off on bionic | `86f17d74a` |
+| Patch | Concern |
+|-------|---------|
+| `0001-android-route-bionic-memory-through-Unix-helpers-and.patch` | `PlatformInfo.IsBionic`, Unix memory routing, `ASharedMemory_create` shared memory |
+| `0002-android-host-no-mirror-address-space-fallback-on-bio.patch` | `TryCreateWithoutMirror`, `MemoryManagerHostNoMirror`, `ArmProcessContextFactory` fallback |
+| `0003-android-disable-sparse-JIT-tables-and-honor-bionic-i.patch` | Sparse JIT off on bionic, `PreciseSleepHelper` bionic path |
 
-`LibRyubing` still sets `PlatformInfo.IsBionic` at init (adapter layer).
+`LibRyubing` still sets `PlatformInfo.IsBionic = true` at init (adapter layer).

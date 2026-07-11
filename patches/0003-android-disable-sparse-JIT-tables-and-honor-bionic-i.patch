@@ -1,0 +1,55 @@
+From 1375efe5d5a81171b8cf6e04e14a39bbb458c243 Mon Sep 17 00:00:00 2001
+From: Jochem Kuipers <jochem@kuipers.cc>
+Date: Sun, 12 Jul 2026 00:50:55 +0200
+Subject: [PATCH 3/3] android: disable sparse JIT tables and honor bionic in
+ precise sleep
+
+Ported from Kenji-NX libryujinx_bionic: sparse function tables are off
+when PlatformInfo.IsBionic, and Nanosleep is used for bionic hosts.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs | 6 ++++--
+ src/Ryujinx.Cpu/AddressTable.cs                       | 2 +-
+ 2 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs b/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs
+index 3c30a7f60..60f65f3d4 100644
+--- a/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs
++++ b/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs
+@@ -12,7 +12,8 @@ namespace Ryujinx.Common.PreciseSleep
+         /// <returns>A precise sleep event</returns>
+         public static IPreciseSleepEvent CreateEvent()
+         {
+-            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
++            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() ||
++                OperatingSystem.IsAndroid() || PlatformInfo.IsBionic)
+             {
+                 return new NanosleepEvent();
+             }
+@@ -52,7 +53,8 @@ namespace Ryujinx.Common.PreciseSleep
+                     evt.WaitOne((int)ms);
+                 }
+ 
+-                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
++                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() ||
++                OperatingSystem.IsAndroid() || PlatformInfo.IsBionic)
+                 {
+                     // Do a nanosleep.
+                     now = PerformanceCounter.ElapsedTicks;
+diff --git a/src/Ryujinx.Cpu/AddressTable.cs b/src/Ryujinx.Cpu/AddressTable.cs
+index da58eb0c3..93a45647e 100644
+--- a/src/Ryujinx.Cpu/AddressTable.cs
++++ b/src/Ryujinx.Cpu/AddressTable.cs
+@@ -179,7 +179,7 @@ namespace ARMeilleure.Common
+         public static AddressTable<TEntry> CreateForArm(bool for64Bits, MemoryManagerType type)
+         {
+             // Assume software memory means that we don't want to use any signal handlers.
+-            bool sparse = type is not MemoryManagerType.SoftwareMmu and not MemoryManagerType.SoftwarePageTable;
++            bool sparse = type is not MemoryManagerType.SoftwareMmu and not MemoryManagerType.SoftwarePageTable && PlatformInfo.IsBionic != true;
+ 
+             return new AddressTable<TEntry>(AddressTablePresets.GetArmPreset(for64Bits, sparse), sparse);
+         }
+-- 
+2.55.0
+

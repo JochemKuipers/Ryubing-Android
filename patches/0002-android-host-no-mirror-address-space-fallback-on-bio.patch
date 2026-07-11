@@ -1,0 +1,474 @@
+From c3c13c2bccf3e9a0b8faafbe14f28601c1912b0f Mon Sep 17 00:00:00 2001
+From: Jochem Kuipers <jochem@kuipers.cc>
+Date: Sun, 12 Jul 2026 00:50:51 +0200
+Subject: [PATCH 2/3] android: host-no-mirror address space fallback on bionic
+
+Ported from Kenji-NX libryujinx_bionic: when mirrored reservation fails,
+TryCreateWithoutMirror plus MemoryManagerHostNoMirror keeps host-mapped
+mode working on Android.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ src/Ryujinx.Cpu/AddressSpace.cs               |  36 +-
+ .../Jit/MemoryManagerHostNoMirror.cs          | 314 ++++++++++++++++++
+ .../HOS/ArmProcessContextFactory.cs           |  31 +-
+ 3 files changed, 364 insertions(+), 17 deletions(-)
+ create mode 100644 src/Ryujinx.Cpu/Jit/MemoryManagerHostNoMirror.cs
+
+diff --git a/src/Ryujinx.Cpu/AddressSpace.cs b/src/Ryujinx.Cpu/AddressSpace.cs
+index 6664ed134..59e55e130 100644
+--- a/src/Ryujinx.Cpu/AddressSpace.cs
++++ b/src/Ryujinx.Cpu/AddressSpace.cs
+@@ -5,6 +5,8 @@ namespace Ryujinx.Cpu
+ {
+     public class AddressSpace : IDisposable
+     {
++        private const MemoryAllocationFlags AsFlags = MemoryAllocationFlags.Reserve | MemoryAllocationFlags.ViewCompatible;
++
+         private readonly MemoryBlock _backingMemory;
+ 
+         public MemoryBlock Base { get; }
+@@ -25,28 +27,42 @@ namespace Ryujinx.Cpu
+         {
+             addressSpace = null;
+ 
+-            const MemoryAllocationFlags AsFlags = MemoryAllocationFlags.Reserve | MemoryAllocationFlags.ViewCompatible;
++            MemoryBlock baseMemory = null;
++            MemoryBlock mirrorMemory = null;
++
++            try
++            {
++                baseMemory = new MemoryBlock(asSize, AsFlags);
++                mirrorMemory = new MemoryBlock(asSize, AsFlags);
++                addressSpace = new AddressSpace(backingMemory, baseMemory, mirrorMemory, asSize);
++            }
++            catch (SystemException)
++            {
++                baseMemory?.Dispose();
++                mirrorMemory?.Dispose();
++            }
++
++            return addressSpace != null;
++        }
++
++        public static bool TryCreateWithoutMirror(ulong asSize, out MemoryBlock addressSpace)
++        {
++            addressSpace = null;
+ 
+             ulong minAddressSpaceSize = Math.Min(asSize, 1UL << 36);
+ 
+             // Attempt to create the address space with expected size or try to reduce it until it succeed.
+-            for (ulong addressSpaceSize = asSize; addressSpaceSize >= minAddressSpaceSize; addressSpaceSize >>= 1)
++            for (ulong addressSpaceSize = asSize; addressSpaceSize >= minAddressSpaceSize; addressSpaceSize -= 0x100000000UL)
+             {
+-                MemoryBlock baseMemory = null;
+-                MemoryBlock mirrorMemory = null;
+-
+                 try
+                 {
+-                    baseMemory = new MemoryBlock(addressSpaceSize, AsFlags);
+-                    mirrorMemory = new MemoryBlock(addressSpaceSize, AsFlags);
+-                    addressSpace = new AddressSpace(backingMemory, baseMemory, mirrorMemory, addressSpaceSize);
++                    MemoryBlock baseMemory = new(addressSpaceSize, AsFlags);
++                    addressSpace = baseMemory;
+ 
+                     break;
+                 }
+                 catch (SystemException)
+                 {
+-                    baseMemory?.Dispose();
+-                    mirrorMemory?.Dispose();
+                 }
+             }
+ 
+diff --git a/src/Ryujinx.Cpu/Jit/MemoryManagerHostNoMirror.cs b/src/Ryujinx.Cpu/Jit/MemoryManagerHostNoMirror.cs
+new file mode 100644
+index 000000000..0318b862e
+--- /dev/null
++++ b/src/Ryujinx.Cpu/Jit/MemoryManagerHostNoMirror.cs
+@@ -0,0 +1,314 @@
++using ARMeilleure.Memory;
++using Ryujinx.Memory;
++using Ryujinx.Memory.Range;
++using Ryujinx.Memory.Tracking;
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Runtime.CompilerServices;
++
++namespace Ryujinx.Cpu.Jit
++{
++    /// <summary>
++    /// Host-mapped memory manager for a single reserved region (no mirror pair).
++    /// Used on bionic when mirrored address-space reservation fails.
++    /// </summary>
++    public sealed class MemoryManagerHostNoMirror : VirtualMemoryManagerRefCountedBase, IMemoryManager, IVirtualMemoryManagerTracked
++    {
++        private readonly InvalidAccessHandler _invalidAccessHandler;
++        private readonly bool _unsafeMode;
++
++        private readonly MemoryBlock _addressSpace;
++        private readonly MemoryBlock _backingMemory;
++        private readonly PageTable<ulong> _pageTable;
++
++        public int AddressSpaceBits { get; }
++        protected override ulong AddressSpaceSize { get; }
++
++        private readonly MemoryEhMeilleure _memoryEh;
++
++        private readonly ManagedPageFlags _pages;
++
++        /// <inheritdoc/>
++        public bool UsesPrivateAllocations => false;
++
++        public nint PageTablePointer => _addressSpace.Pointer;
++
++        public MemoryManagerType Type => _unsafeMode ? MemoryManagerType.HostMappedUnsafe : MemoryManagerType.HostMapped;
++
++        public MemoryTracking Tracking { get; }
++
++        public event Action<ulong, ulong> UnmapEvent;
++
++        public MemoryManagerHostNoMirror(
++            MemoryBlock addressSpace,
++            MemoryBlock backingMemory,
++            bool unsafeMode,
++            InvalidAccessHandler invalidAccessHandler)
++        {
++            _addressSpace = addressSpace;
++            _backingMemory = backingMemory;
++            _pageTable = new PageTable<ulong>();
++            _invalidAccessHandler = invalidAccessHandler;
++            _unsafeMode = unsafeMode;
++            AddressSpaceSize = addressSpace.Size;
++
++            ulong asSize = PageSize;
++            int asBits = PageBits;
++
++            while (asSize < addressSpace.Size)
++            {
++                asSize <<= 1;
++                asBits++;
++            }
++
++            AddressSpaceBits = asBits;
++
++            _pages = new ManagedPageFlags(asBits);
++
++            Tracking = new MemoryTracking(this, (int)MemoryBlock.GetPageSize(), invalidAccessHandler);
++            _memoryEh = new MemoryEhMeilleure(addressSpace, null, Tracking);
++        }
++
++        private void AssertMapped(ulong va, ulong size)
++        {
++            if (!ValidateAddressAndSize(va, size) || !_pages.IsRangeMapped(va, size))
++            {
++                throw new InvalidMemoryRegionException($"Not mapped: va=0x{va:X16}, size=0x{size:X16}");
++            }
++        }
++
++        /// <inheritdoc/>
++        public void Map(ulong va, ulong pa, ulong size, MemoryMapFlags flags)
++        {
++            AssertValidAddressAndSize(va, size);
++
++            _addressSpace.MapView(_backingMemory, pa, va, size);
++            _pages.AddMapping(va, size);
++            PtMap(va, pa, size);
++
++            Tracking.Map(va, size);
++        }
++
++        private void PtMap(ulong va, ulong pa, ulong size)
++        {
++            while (size != 0)
++            {
++                _pageTable.Map(va, pa);
++
++                va += PageSize;
++                pa += PageSize;
++                size -= PageSize;
++            }
++        }
++
++        /// <inheritdoc/>
++        public void Unmap(ulong va, ulong size)
++        {
++            AssertValidAddressAndSize(va, size);
++
++            UnmapEvent?.Invoke(va, size);
++            Tracking.Unmap(va, size);
++
++            _pages.RemoveMapping(va, size);
++            PtUnmap(va, size);
++            _addressSpace.UnmapView(_backingMemory, va, size);
++        }
++
++        private void PtUnmap(ulong va, ulong size)
++        {
++            while (size != 0)
++            {
++                _pageTable.Unmap(va);
++
++                va += PageSize;
++                size -= PageSize;
++            }
++        }
++
++        /// <inheritdoc/>
++        public void Reprotect(ulong va, ulong size, MemoryPermission permission)
++        {
++        }
++
++        public ref T GetRef<T>(ulong va) where T : unmanaged
++        {
++            if (!IsContiguous(va, Unsafe.SizeOf<T>()))
++            {
++                ThrowMemoryNotContiguous();
++            }
++
++            SignalMemoryTracking(va, (ulong)Unsafe.SizeOf<T>(), true);
++
++            return ref _backingMemory.GetRef<T>(GetPhysicalAddressChecked(va));
++        }
++
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++        public override bool IsMapped(ulong va)
++        {
++            return ValidateAddress(va) && _pages.IsMapped(va);
++        }
++
++        /// <inheritdoc/>
++        public bool IsRangeMapped(ulong va, ulong size)
++        {
++            AssertValidAddressAndSize(va, size);
++
++            return _pages.IsRangeMapped(va, size);
++        }
++
++        /// <inheritdoc/>
++        public IEnumerable<HostMemoryRange> GetHostRegions(ulong va, ulong size)
++        {
++            if (size == 0)
++            {
++                return Enumerable.Empty<HostMemoryRange>();
++            }
++
++            var guestRegions = GetPhysicalRegionsImpl(va, size);
++            if (guestRegions == null)
++            {
++                return null;
++            }
++
++            var regions = new HostMemoryRange[guestRegions.Count];
++
++            for (int i = 0; i < regions.Length; i++)
++            {
++                var guestRegion = guestRegions[i];
++                nint pointer = _backingMemory.GetPointer(guestRegion.Address, guestRegion.Size);
++                regions[i] = new HostMemoryRange((nuint)(ulong)pointer, guestRegion.Size);
++            }
++
++            return regions;
++        }
++
++        /// <inheritdoc/>
++        public IEnumerable<MemoryRange> GetPhysicalRegions(ulong va, ulong size)
++        {
++            if (size == 0)
++            {
++                return Enumerable.Empty<MemoryRange>();
++            }
++
++            return GetPhysicalRegionsImpl(va, size);
++        }
++
++        private List<MemoryRange> GetPhysicalRegionsImpl(ulong va, ulong size)
++        {
++            if (!ValidateAddress(va) || !ValidateAddressAndSize(va, size))
++            {
++                return null;
++            }
++
++            int pages = GetPagesCount(va, (uint)size, out va);
++
++            var regions = new List<MemoryRange>();
++
++            ulong regionStart = GetPhysicalAddressInternal(va);
++            ulong regionSize = PageSize;
++
++            for (int page = 0; page < pages - 1; page++)
++            {
++                if (!ValidateAddress(va + PageSize))
++                {
++                    return null;
++                }
++
++                ulong newPa = GetPhysicalAddressInternal(va + PageSize);
++
++                if (GetPhysicalAddressInternal(va) + PageSize != newPa)
++                {
++                    regions.Add(new MemoryRange(regionStart, regionSize));
++                    regionStart = newPa;
++                    regionSize = 0;
++                }
++
++                va += PageSize;
++                regionSize += PageSize;
++            }
++
++            regions.Add(new MemoryRange(regionStart, regionSize));
++
++            return regions;
++        }
++
++        private ulong GetPhysicalAddressChecked(ulong va)
++        {
++            if (!IsMapped(va))
++            {
++                ThrowInvalidMemoryRegionException($"Not mapped: va=0x{va:X16}");
++            }
++
++            return GetPhysicalAddressInternal(va);
++        }
++
++        private ulong GetPhysicalAddressInternal(ulong va)
++        {
++            return _pageTable.Read(va) + (va & PageMask);
++        }
++
++        /// <inheritdoc/>
++        public override void SignalMemoryTracking(ulong va, ulong size, bool write, bool precise = false, int? exemptId = null)
++        {
++            AssertValidAddressAndSize(va, size);
++
++            if (precise)
++            {
++                Tracking.VirtualMemoryEvent(va, size, write, precise: true, exemptId);
++                return;
++            }
++
++            _pages.SignalMemoryTracking(Tracking, va, size, write, exemptId);
++        }
++
++        /// <inheritdoc/>
++        public void TrackingReprotect(ulong va, ulong size, MemoryPermission protection, bool guest)
++        {
++            if (guest)
++            {
++                _addressSpace.Reprotect(va, size, protection, false);
++            }
++            else
++            {
++                _pages.TrackingReprotect(va, size, protection);
++            }
++        }
++
++        /// <inheritdoc/>
++        public RegionHandle BeginTracking(ulong address, ulong size, int id, RegionFlags flags)
++        {
++            return Tracking.BeginTracking(address, size, id, flags);
++        }
++
++        /// <inheritdoc/>
++        public MultiRegionHandle BeginGranularTracking(ulong address, ulong size, IEnumerable<IRegionHandle> handles, ulong granularity, int id, RegionFlags flags)
++        {
++            return Tracking.BeginGranularTracking(address, size, handles, granularity, id, flags);
++        }
++
++        /// <inheritdoc/>
++        public SmartMultiRegionHandle BeginSmartGranularTracking(ulong address, ulong size, ulong granularity, int id)
++        {
++            return Tracking.BeginSmartGranularTracking(address, size, granularity, id);
++        }
++
++        protected override void Destroy()
++        {
++            _addressSpace.Dispose();
++            _memoryEh.Dispose();
++        }
++
++        protected override Memory<byte> GetPhysicalAddressMemory(nuint pa, int size)
++            => _backingMemory.GetMemory(pa, size);
++
++        protected override Span<byte> GetPhysicalAddressSpan(nuint pa, int size)
++            => _backingMemory.GetSpan(pa, size);
++
++        protected override nuint TranslateVirtualAddressChecked(ulong va)
++            => (nuint)GetPhysicalAddressChecked(va);
++
++        protected override nuint TranslateVirtualAddressUnchecked(ulong va)
++            => (nuint)GetPhysicalAddressInternal(va);
++    }
++}
+diff --git a/src/Ryujinx.HLE/HOS/ArmProcessContextFactory.cs b/src/Ryujinx.HLE/HOS/ArmProcessContextFactory.cs
+index 35ca06727..17fe93cf0 100644
+--- a/src/Ryujinx.HLE/HOS/ArmProcessContextFactory.cs
++++ b/src/Ryujinx.HLE/HOS/ArmProcessContextFactory.cs
+@@ -74,11 +74,13 @@ namespace Ryujinx.HLE.HOS
+                     : new JitEngine(_tickSource);
+ 
+                 AddressSpace addressSpace = null;
++                MemoryBlock asNoMirror = null;
+ 
+                 // We want to use host tracked mode if the host page size is > 4KB.
+                 if ((mode == MemoryManagerMode.HostMapped || mode == MemoryManagerMode.HostMappedUnsafe) && MemoryBlock.GetPageSize() <= 0x1000)
+                 {
+-                    if (!AddressSpace.TryCreate(context.Memory, addressSpaceSize, out addressSpace))
++                    if (!AddressSpace.TryCreate(context.Memory, addressSpaceSize, out addressSpace) &&
++                        !AddressSpace.TryCreateWithoutMirror(addressSpaceSize, out asNoMirror))
+                     {
+                         Logger.Warning?.Print(LogClass.Cpu, "Address space creation failed, falling back to software page table");
+ 
+@@ -95,20 +97,30 @@ namespace Ryujinx.HLE.HOS
+ 
+                     case MemoryManagerMode.HostMapped:
+                     case MemoryManagerMode.HostMappedUnsafe:
+-                        if (addressSpace == null)
++                        if (addressSpace == null && asNoMirror == null)
+                         {
+                             MemoryManagerHostTracked memoryManagerHostTracked = new(context.Memory, addressSpaceSize, mode == MemoryManagerMode.HostMappedUnsafe, invalidAccessHandler);
+                             processContext = new ArmProcessContext<MemoryManagerHostTracked>(pid, cpuEngine, _gpu, memoryManagerHostTracked, addressSpaceSize, for64Bit);
+                         }
+                         else
+                         {
+-                            if (addressSpaceSize != addressSpace.AddressSpaceSize)
++                            bool unsafeMode = mode == MemoryManagerMode.HostMappedUnsafe;
++
++                            if (addressSpace != null)
+                             {
+-                                Logger.Warning?.Print(LogClass.Emulation, $"Allocated address space (0x{addressSpace.AddressSpaceSize:X}) is smaller than guest application requirements (0x{addressSpaceSize:X})");
+-                            }
++                                if (addressSpaceSize != addressSpace.AddressSpaceSize)
++                                {
++                                    Logger.Warning?.Print(LogClass.Emulation, $"Allocated address space (0x{addressSpace.AddressSpaceSize:X}) is smaller than guest application requirements (0x{addressSpaceSize:X})");
++                                }
+ 
+-                            MemoryManagerHostMapped memoryManagerHostMapped = new(addressSpace, mode == MemoryManagerMode.HostMappedUnsafe, invalidAccessHandler);
+-                            processContext = new ArmProcessContext<MemoryManagerHostMapped>(pid, cpuEngine, _gpu, memoryManagerHostMapped, addressSpace.AddressSpaceSize, for64Bit);
++                                MemoryManagerHostMapped memoryManagerHostMapped = new(addressSpace, unsafeMode, invalidAccessHandler);
++                                processContext = new ArmProcessContext<MemoryManagerHostMapped>(pid, cpuEngine, _gpu, memoryManagerHostMapped, addressSpace.AddressSpaceSize, for64Bit);
++                            }
++                            else
++                            {
++                                MemoryManagerHostNoMirror memoryManagerHostNoMirror = new(asNoMirror, context.Memory, unsafeMode, invalidAccessHandler);
++                                processContext = new ArmProcessContext<MemoryManagerHostNoMirror>(pid, cpuEngine, _gpu, memoryManagerHostNoMirror, asNoMirror.Size, for64Bit);
++                            }
+                         }
+ 
+                         break;
+@@ -116,6 +128,11 @@ namespace Ryujinx.HLE.HOS
+                     default:
+                         throw new InvalidOperationException($"{nameof(mode)} contains an invalid value: {mode}");
+                 }
++
++                if (addressSpaceSize != processContext.AddressSpaceSize)
++                {
++                    Logger.Warning?.Print(LogClass.Emulation, $"Allocated address space (0x{processContext.AddressSpaceSize:X}) is smaller than guest application requirements (0x{addressSpaceSize:X})");
++                }
+             }
+ 
+             string cacheSelector = _diskCacheSelector ?? "default";
+-- 
+2.55.0
+

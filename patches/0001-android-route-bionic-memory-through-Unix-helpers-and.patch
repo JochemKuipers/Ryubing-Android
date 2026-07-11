@@ -1,0 +1,260 @@
+From ce9e8335a2d98759986c334bfa49051c59b2541e Mon Sep 17 00:00:00 2001
+From: Jochem Kuipers <jochem@kuipers.cc>
+Date: Sun, 12 Jul 2026 00:50:34 +0200
+Subject: [PATCH 1/3] android: route bionic memory through Unix helpers and
+ ASharedMemory
+
+Ported from Kenji-NX libryujinx_bionic: PlatformInfo.IsBionic lets
+NativeAOT hosts select the Unix memory path and back shared memory with
+ASharedMemory_create instead of /dev/shm.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ src/Ryujinx.Common/PlatformInfo.cs            |  7 ++++++
+ src/Ryujinx.Memory/MemoryBlock.cs             |  3 ++-
+ src/Ryujinx.Memory/MemoryManagement.cs        | 25 ++++++++++---------
+ src/Ryujinx.Memory/MemoryManagementUnix.cs    | 21 ++++++++++++++++
+ src/Ryujinx.Memory/MemoryManagerUnixHelper.cs | 10 +++++---
+ 5 files changed, 50 insertions(+), 16 deletions(-)
+ create mode 100644 src/Ryujinx.Common/PlatformInfo.cs
+
+diff --git a/src/Ryujinx.Common/PlatformInfo.cs b/src/Ryujinx.Common/PlatformInfo.cs
+new file mode 100644
+index 000000000..613eb81b4
+--- /dev/null
++++ b/src/Ryujinx.Common/PlatformInfo.cs
+@@ -0,0 +1,7 @@
++namespace Ryujinx.Common
++{
++    public static class PlatformInfo
++    {
++        public static bool IsBionic { get; set; }
++    }
++}
+diff --git a/src/Ryujinx.Memory/MemoryBlock.cs b/src/Ryujinx.Memory/MemoryBlock.cs
+index c2ba51f82..0b03d2bf7 100644
+--- a/src/Ryujinx.Memory/MemoryBlock.cs
++++ b/src/Ryujinx.Memory/MemoryBlock.cs
+@@ -1,3 +1,4 @@
++using Ryujinx.Common;
+ using System;
+ using System.Runtime.CompilerServices;
+ using System.Threading;
+@@ -426,7 +427,7 @@ namespace Ryujinx.Memory
+                     return OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17134);
+                 }
+ 
+-                return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
++                return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic;
+             }
+ 
+             return true;
+diff --git a/src/Ryujinx.Memory/MemoryManagement.cs b/src/Ryujinx.Memory/MemoryManagement.cs
+index 276cc2a4c..67bb0a1bb 100644
+--- a/src/Ryujinx.Memory/MemoryManagement.cs
++++ b/src/Ryujinx.Memory/MemoryManagement.cs
+@@ -1,3 +1,4 @@
++using Ryujinx.Common;
+ using System;
+ 
+ namespace Ryujinx.Memory
+@@ -10,7 +11,7 @@ namespace Ryujinx.Memory
+             {
+                 return MemoryManagementWindows.Allocate((nint)size);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 return MemoryManagementUnix.Allocate(size, forJit);
+             }
+@@ -26,7 +27,7 @@ namespace Ryujinx.Memory
+             {
+                 return MemoryManagementWindows.Reserve((nint)size, viewCompatible);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 return MemoryManagementUnix.Reserve(size, forJit);
+             }
+@@ -42,7 +43,7 @@ namespace Ryujinx.Memory
+             {
+                 MemoryManagementWindows.Commit(address, (nint)size);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 MemoryManagementUnix.Commit(address, size, forJit);
+             }
+@@ -58,7 +59,7 @@ namespace Ryujinx.Memory
+             {
+                 MemoryManagementWindows.Decommit(address, (nint)size);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 MemoryManagementUnix.Decommit(address, size);
+             }
+@@ -74,7 +75,7 @@ namespace Ryujinx.Memory
+             {
+                 MemoryManagementWindows.MapView(sharedMemory, srcOffset, address, (nint)size, owner);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 MemoryManagementUnix.MapView(sharedMemory, srcOffset, address, size);
+             }
+@@ -90,7 +91,7 @@ namespace Ryujinx.Memory
+             {
+                 MemoryManagementWindows.UnmapView(sharedMemory, address, (nint)size, owner);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 MemoryManagementUnix.UnmapView(address, size);
+             }
+@@ -108,7 +109,7 @@ namespace Ryujinx.Memory
+             {
+                 result = MemoryManagementWindows.Reprotect(address, (nint)size, permission, forView);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 result = MemoryManagementUnix.Reprotect(address, size, permission);
+             }
+@@ -129,7 +130,7 @@ namespace Ryujinx.Memory
+             {
+                 return MemoryManagementWindows.Free(address, (nint)size);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 return MemoryManagementUnix.Free(address);
+             }
+@@ -145,7 +146,7 @@ namespace Ryujinx.Memory
+             {
+                 return MemoryManagementWindows.CreateSharedMemory((nint)size, reserve);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 return MemoryManagementUnix.CreateSharedMemory(size, reserve);
+             }
+@@ -161,7 +162,7 @@ namespace Ryujinx.Memory
+             {
+                 MemoryManagementWindows.DestroySharedMemory(handle);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 MemoryManagementUnix.DestroySharedMemory(handle);
+             }
+@@ -177,7 +178,7 @@ namespace Ryujinx.Memory
+             {
+                 return MemoryManagementWindows.MapSharedMemory(handle);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 return MemoryManagementUnix.MapSharedMemory(handle, size);
+             }
+@@ -193,7 +194,7 @@ namespace Ryujinx.Memory
+             {
+                 MemoryManagementWindows.UnmapSharedMemory(address);
+             }
+-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+             {
+                 MemoryManagementUnix.UnmapSharedMemory(address, size);
+             }
+diff --git a/src/Ryujinx.Memory/MemoryManagementUnix.cs b/src/Ryujinx.Memory/MemoryManagementUnix.cs
+index 76a63a466..14de630ed 100644
+--- a/src/Ryujinx.Memory/MemoryManagementUnix.cs
++++ b/src/Ryujinx.Memory/MemoryManagementUnix.cs
+@@ -1,3 +1,5 @@
++using Ryujinx.Common;
++using Ryujinx.Common.Logging;
+ using System;
+ using System.Collections.Concurrent;
+ using System.Runtime.InteropServices;
+@@ -8,6 +10,7 @@ namespace Ryujinx.Memory
+ {
+     [SupportedOSPlatform("linux")]
+     [SupportedOSPlatform("macos")]
++    [SupportedOSPlatform("android")]
+     static class MemoryManagementUnix
+     {
+         private static readonly ConcurrentDictionary<nint, ulong> _allocations = new();
+@@ -156,6 +159,24 @@ namespace Ryujinx.Memory
+                     }
+                 }
+             }
++            else if (PlatformInfo.IsBionic)
++            {
++                byte[] memName = "Ryujinx-XXXXXX"u8.ToArray();
++
++                Logger.Debug?.Print(LogClass.Cpu, $"Creating Android SharedMemory of size:{size}");
++
++                fixed (byte* pMemName = memName)
++                {
++                    fd = ASharedMemory_create((nint)pMemName, (nuint)size);
++                    if (fd <= 0)
++                    {
++                        throw new OutOfMemoryException();
++                    }
++                }
++
++                // ASharedMemory_create handles ftruncate for us.
++                return (nint)fd;
++            }
+             else
+             {
+                 byte[] fileName = "/dev/shm/Ryujinx-XXXXXX"u8.ToArray();
+diff --git a/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs b/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs
+index e5a0b7a4d..536ff972e 100644
+--- a/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs
++++ b/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs
+@@ -1,3 +1,4 @@
++using Ryujinx.Common;
+ using System;
+ using System.Runtime.InteropServices;
+ using System.Runtime.Versioning;
+@@ -89,6 +90,9 @@ namespace Ryujinx.Memory
+         [LibraryImport("libc", SetLastError = true)]
+         public static partial int shm_unlink(nint name);
+ 
++        [DllImport("android")]
++        internal static extern int ASharedMemory_create(nint name, nuint size);
++
+         private static int MmapFlagsToSystemFlags(MmapFlags flags)
+         {
+             int result = 0;
+@@ -110,7 +114,7 @@ namespace Ryujinx.Memory
+ 
+             if (flags.HasFlag(MmapFlags.MAP_ANONYMOUS))
+             {
+-                if (OperatingSystem.IsLinux())
++                if (OperatingSystem.IsLinux() || PlatformInfo.IsBionic)
+                 {
+                     result |= MAP_ANONYMOUS_LINUX_GENERIC;
+                 }
+@@ -126,7 +130,7 @@ namespace Ryujinx.Memory
+ 
+             if (flags.HasFlag(MmapFlags.MAP_NORESERVE))
+             {
+-                if (OperatingSystem.IsLinux())
++                if (OperatingSystem.IsLinux() || PlatformInfo.IsBionic)
+                 {
+                     result |= MAP_NORESERVE_LINUX_GENERIC;
+                 }
+@@ -142,7 +146,7 @@ namespace Ryujinx.Memory
+ 
+             if (flags.HasFlag(MmapFlags.MAP_UNLOCKED))
+             {
+-                if (OperatingSystem.IsLinux())
++                if (OperatingSystem.IsLinux() || PlatformInfo.IsBionic)
+                 {
+                     result |= MAP_UNLOCKED_LINUX_GENERIC;
+                 }
+-- 
+2.55.0
+
