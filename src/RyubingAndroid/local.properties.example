@@ -1,0 +1,2 @@
+# Copy to local.properties (gitignored) or run scripts/setup-android-sdk.sh
+sdk.dir=/home/you/Android/Sdk

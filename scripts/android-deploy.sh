@@ -10,9 +10,8 @@ ACTIVITY="$PACKAGE/.MainActivity"
 JDWP_PORT="${RYUBING_JDWP_PORT:-8700}"
 WIRELESS_ENV="$REPO_ROOT/.wireless-adb.env"
 
-export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
-export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
-export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+# shellcheck source=android-sdk-env.sh
+source "$REPO_ROOT/scripts/android-sdk-env.sh"
 
 usage() {
     cat <<EOF

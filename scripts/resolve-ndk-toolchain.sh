@@ -8,7 +8,7 @@
 #   2. ryubing.ndk.toolchain in src/RyubingAndroid/gradle.properties
 #   3. sdk.dir from src/RyubingAndroid/local.properties
 #   4. ANDROID_HOME / ANDROID_SDK_ROOT
-#   5. /opt/android-sdk (common WSL/Android Studio layout in this repo's VS Code tasks)
+#   5. ~/Android/Sdk (default local install from scripts/setup-android-sdk.sh)
 #
 # Usage: scripts/resolve-ndk-toolchain.sh
 set -euo pipefail
@@ -71,7 +71,7 @@ if [[ -f "$local_props" ]]; then
   fi
 fi
 
-for sdk in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "/opt/android-sdk"; do
+for sdk in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Android/Sdk"; do
   [[ -n "$sdk" && -d "$sdk" ]] || continue
   if bin="$(ndk_bin_from_sdk "$sdk")"; then
     printf '%s' "$bin"

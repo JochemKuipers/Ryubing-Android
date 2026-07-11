@@ -7,11 +7,7 @@
             "command": "./gradlew",
             "args": ["assembleDebug"],
             "options": {
-                "cwd": "${workspaceFolder}/src/RyubingAndroid",
-                "env": {
-                    "ANDROID_HOME": "/opt/android-sdk",
-                    "ANDROID_SDK_ROOT": "/opt/android-sdk"
-                }
+                "cwd": "${workspaceFolder}/src/RyubingAndroid"
             },
             "group": {
                 "kind": "build",

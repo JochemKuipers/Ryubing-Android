@@ -36,8 +36,29 @@ See the full roadmap in the project plan.
 Prerequisites:
 
 - .NET SDK matching `upstream/ryubing/global.json`
-- Android NDK r26+ (LLVM toolchain on `PATH`)
-- Android SDK + JDK 17
+- JDK 17 (Gradle daemon + `sdkmanager`; Java 21 breaks `sdkmanager` with a JAXB error)
+- Android SDK + NDK (local install — do not use the Arch `android-sdk` pacman stack)
+
+### Android SDK (local install)
+
+Bootstrap a user-local SDK under `~/Android/Sdk` (writes `src/RyubingAndroid/local.properties`):
+
+```bash
+scripts/setup-android-sdk.sh
+```
+
+This downloads Google's command-line tools, accepts licenses, and installs platform 36, NDK `27.2.12479018`, and CMake `3.22.1`. Override the install root with `RYUBING_ANDROID_SDK=/path/to/sdk`.
+
+Optional shell env (fish):
+
+```fish
+set -gx ANDROID_HOME ~/Android/Sdk
+set -gx ANDROID_SDK_ROOT ~/Android/Sdk
+fish_add_path ~/Android/Sdk/platform-tools
+fish_add_path ~/Android/Sdk/cmdline-tools/latest/bin
+```
+
+### Build
 
 ```bash
 git submodule update --init --recursive
