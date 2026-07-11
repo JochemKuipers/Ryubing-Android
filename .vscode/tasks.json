@@ -2,6 +2,128 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "android: build debug",
+            "type": "shell",
+            "command": "./gradlew",
+            "args": ["assembleDebug"],
+            "options": {
+                "cwd": "${workspaceFolder}/src/RyubingAndroid",
+                "env": {
+                    "ANDROID_HOME": "/opt/android-sdk",
+                    "ANDROID_SDK_ROOT": "/opt/android-sdk"
+                }
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "close": true
+            }
+        },
+        {
+            "label": "android: ensure device",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/android-deploy.sh",
+            "args": ["ensure-device"],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "android: prepare debug launch",
+            "dependsOn": [
+                "android: wireless connect",
+                "android: ensure device",
+                "android: build debug"
+            ],
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        },
+        {
+            "label": "android: install",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/android-deploy.sh",
+            "args": ["install"],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "android: launch",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/android-deploy.sh",
+            "args": ["launch"],
+            "problemMatcher": []
+        },
+        {
+            "label": "android: deploy",
+            "dependsOn": [
+                "android: build debug",
+                "android: install",
+                "android: launch"
+            ],
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        },
+        {
+            "label": "android: debug setup",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/android-deploy.sh",
+            "args": ["debug"],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "dependsOn": ["android: build debug"]
+        },
+        {
+            "label": "android: logcat",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/android-deploy.sh",
+            "args": ["logcat"],
+            "isBackground": true,
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            }
+        },
+        {
+            "label": "android: devices",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/android-deploy.sh",
+            "args": ["devices"],
+            "problemMatcher": []
+        },
+        {
+            "label": "android: wireless connect",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/android-deploy.sh",
+            "args": ["wireless", "connect"],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "android: wireless status",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/android-deploy.sh",
+            "args": ["wireless", "status"],
+            "problemMatcher": []
+        },
+        {
             "label": "build",
             "command": "dotnet",
             "type": "process",

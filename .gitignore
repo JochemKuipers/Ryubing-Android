@@ -9,6 +9,7 @@ publish/
 .gradle/
 build/
 local.properties
+.wireless-adb.env
 *.apk
 *.aab
 *.keystore

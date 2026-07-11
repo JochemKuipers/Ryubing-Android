@@ -2,25 +2,46 @@
     "version": "0.2.0",
     "configurations": [
         {
-            // Use IntelliSense to find out which attributes exist for C# debugging
-            // Use hover for the description of the existing attributes
-            // For further information visit https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md
-            "name": ".NET Core Launch (console)",
-            "type": "coreclr",
+            "type": "android",
             "request": "launch",
-            "preLaunchTask": "build",
-            // If you have changed target frameworks, make sure to update the program path.
-            "program": "${workspaceFolder}/upstream/ryubing/src/Ryujinx/bin/Debug/net10.0/Ryujinx.dll",
-            "args": [],
-            "cwd": "${workspaceFolder}/upstream/ryubing/src/Ryujinx",
-            // For more information about the 'console' field, see https://aka.ms/VSCode-CS-LaunchJson-Console
-            "console": "internalConsole",
-            "stopAtEntry": false
+            "name": "Android: Launch & Debug",
+            "preLaunchTask": "android: prepare debug launch",
+            "appSrcRoot": "${workspaceFolder}/src/RyubingAndroid/app/src/main",
+            "apkFile": "${workspaceFolder}/src/RyubingAndroid/app/build/outputs/apk/debug/app-debug.apk",
+            "manifestFile": "${workspaceFolder}/src/RyubingAndroid/app/src/main/AndroidManifest.xml",
+            "launchActivity": ".MainActivity",
+            "pmInstallArgs": ["-r", "-d"],
+            "staleBuild": "ignore",
+            "targetDevice": "",
+            "autoStartADB": true,
+            "adbSocket": "localhost:5037",
+            "postLaunchPause": 1500,
+            "trace": true
         },
         {
-            "name": ".NET Core Attach",
-            "type": "coreclr",
-            "request": "attach"
+            "type": "android",
+            "request": "attach",
+            "name": "Android: Attach to Process",
+            "appSrcRoot": "${workspaceFolder}/src/RyubingAndroid/app/src/main",
+            "processId": "${command:PickAndroidProcess}",
+            "targetDevice": "",
+            "adbSocket": "localhost:5037",
+            "trace": true
+        },
+        {
+            "name": "Android: Run (deploy + logcat)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "${workspaceFolder}/scripts/android-deploy.sh logcat",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "android: deploy"
+        },
+        {
+            "name": "Android: Logcat",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "${workspaceFolder}/scripts/android-deploy.sh logcat",
+            "cwd": "${workspaceFolder}"
         }
     ]
 }

@@ -14,5 +14,9 @@
   // upstream tree isn't analyzed in the background.
   "dotnet.backgroundAnalysis.analyzerDiagnosticsScope": "openFiles",
   "dotnet.backgroundAnalysis.compilerDiagnosticsScope": "openFiles",
-  "omnisharp.enableRoslynAnalyzers": false
+  "omnisharp.enableRoslynAnalyzers": false,
+
+  // Android extension defaults assume workspaceRoot/app/src/main; fix for monorepo layout.
+  "android-dev-ext.appSourceRoot": "src/RyubingAndroid/app/src/main",
+  "android-dev-ext.trace": true
 }
