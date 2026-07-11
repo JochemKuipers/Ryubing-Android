@@ -1,3 +1,4 @@
 [submodule "upstream/ryubing"]
 	path = upstream/ryubing
 	url = ssh://forgejo@git.ryujinx.app/projects/Ryubing.git
+	ignore = dirty
