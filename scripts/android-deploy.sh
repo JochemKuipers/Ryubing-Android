@@ -114,7 +114,7 @@ require_device() {
 ensure_native_deps() {
     local dir="$REPO_ROOT/src/RyubingAndroid/app/src/main/jniLibs/arm64-v8a"
     local missing=()
-    for lib in libcrypto.so libssl.so libopenal.so; do
+    for lib in libcrypto.so libssl.so libopenal.so libavcodec.so libavutil.so; do
         [[ -f "$dir/$lib" ]] || missing+=("$lib")
     done
     if ((${#missing[@]} > 0)); then
