@@ -9,6 +9,17 @@ val libRyubingProject = File(repoRoot, "src/LibRyubing/LibRyubing.csproj")
 val jniLibsArm64 = File(rootProject.projectDir, "app/src/main/jniLibs/arm64-v8a")
 val upstreamDir = File(repoRoot, "upstream/ryubing")
 val patchesDir = File(repoRoot, "patches")
+val pinsFile = File(repoRoot, "compat/pins.json")
+
+fun readPinnedUpstreamCommit(): String {
+    if (!pinsFile.isFile) {
+        throw GradleException("Missing ${pinsFile.path} — cannot determine pristine upstream commit.")
+    }
+    val text = pinsFile.readText()
+    val match = Regex(""""upstream_commit"\s*:\s*"([0-9a-f]{7,40})"""").find(text)
+        ?: throw GradleException("compat/pins.json has no upstream_commit field.")
+    return match.groupValues[1]
+}
 
 val dotnetBin: String = (project.findProperty("ryubing.dotnet.bin") as String?)?.takeIf { it.isNotBlank() } ?: "dotnet"
 val dotnetConfig: String = (project.findProperty("ryubing.dotnet.config") as String?)?.takeIf { it.isNotBlank() } ?: "Release"
@@ -34,8 +45,7 @@ fun detectNdkToolchain(): String {
         }
         System.getenv("ANDROID_HOME")?.let { add(File(it)) }
         System.getenv("ANDROID_SDK_ROOT")?.let { add(File(it)) }
-        // Matches .vscode/tasks.json and common WSL installs when env vars are unset.
-        add(File("/opt/android-sdk"))
+        add(File(System.getProperty("user.home"), "Android/Sdk"))
     }
     for (sdk in sdkRoots) {
         val ndkRoot = File(sdk, "ndk")
@@ -78,11 +88,27 @@ val applyUpstreamPatches = tasks.register("applyUpstreamPatches") {
     }
 
     doLast {
-        // Start from the pristine pinned commit, discarding any patches a previous build (or
-        // scripts/apply-patches.sh) applied, so re-running is idempotent regardless of state.
+        val pinnedCommit = readPinnedUpstreamCommit()
+
+        // Ensure the submodule object is present; checkout the pristine Ryubing pin from
+        // compat/pins.json (not a locally patched submodule SHA that may have been committed).
         project.exec {
             workingDir = repoRoot
-            commandLine("git", "submodule", "update", "--init", "--force", "--checkout", "upstream/ryubing")
+            commandLine("git", "submodule", "update", "--init", "--force", "upstream/ryubing")
+        }
+        project.exec {
+            workingDir = upstreamDir
+            commandLine("git", "checkout", "--force", pinnedCommit)
+        }
+        // git apply leaves untracked files (e.g. PlatformInfo.cs) that checkout alone does
+        // not remove; reset + clean so patches always apply to a pristine tree.
+        project.exec {
+            workingDir = upstreamDir
+            commandLine("git", "reset", "--hard", "HEAD")
+        }
+        project.exec {
+            workingDir = upstreamDir
+            commandLine("git", "clean", "-fdx")
         }
 
         val patches = patchesDir
@@ -140,7 +166,7 @@ val publishLibRyubing = tasks.register<Exec>("publishLibRyubing") {
         if (ndkToolchain.isBlank()) {
             throw GradleException(
                 "No usable NDK LLVM toolchain found (checked ryubing.ndk.toolchain, local.properties " +
-                    "sdk.dir, ANDROID_HOME, ANDROID_SDK_ROOT, /opt/android-sdk). " +
+                    "sdk.dir, ANDROID_HOME, ANDROID_SDK_ROOT, ~/Android/Sdk). " +
                     "`dotnet publish -r linux-bionic-arm64` needs the NDK's clang/ld.lld on PATH; " +
                     "set ryubing.ndk.toolchain to the toolchain 'bin' for this OS, or install the NDK " +
                     "via the Android SDK."

@@ -28,6 +28,9 @@ Two entry points apply them:
    submodule and regenerate with `git format-patch`.
 5. **Upstream merge.** When Ryubing accepts an Android fix natively, drop the matching
    patch from this queue and bump the pinned commit (see `compat/pins.json`).
+6. **Never commit patches into `upstream/ryubing`.** Use `git apply` at build time only.
+   If you ran `scripts/apply-patches.sh` (git am), reset the submodule to the pristine
+   `upstream_commit` in `compat/pins.json` before committing a bump.
 
 ## Generating a patch
 

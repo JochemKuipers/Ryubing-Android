@@ -2,14 +2,14 @@
   "app_version": "0.1.0-dev",
   "upstream_repo": "ssh://forgejo@git.ryujinx.app/projects/Ryubing.git",
   "upstream_branch": "master",
-  "upstream_tag": "Canary-1.3.334-3-g86f17d74a",
-  "upstream_commit": "86f17d74ad9f5ef253e30493bf5f1612efd32b2c",
-  "patches_applied": 0,
+  "upstream_tag": "Canary-1.3.335",
+  "upstream_commit": "dc06d0ded61f65256f06f08f39df2e9f089c8b2f",
+  "patches_applied": 3,
   "known_breakages": [],
   "smoke_tests_passed": [],
   "notes": [
-    "Android memory patches (memfd_create, host-no-mirror, sparse JIT disable) merged upstream at 86f17d74",
+    "Upstream pin is pristine Ryubing; Android fixes live in patches/0001-0003 (Kenji libryujinx_bionic port)",
     "LibRyubing sets PlatformInfo.IsBionic at init (adapter layer, not in upstream)",
-    "Patch queue empty; :libryubing:applyUpstreamPatches is a no-op until a new need-driven patch is added"
+    "Do not git-am patches into upstream/ryubing — applyUpstreamPatches applies them at build time"
   ]
 }
