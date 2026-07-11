@@ -111,7 +111,21 @@ require_device() {
     exit 1
 }
 
+ensure_native_deps() {
+    local dir="$REPO_ROOT/src/RyubingAndroid/app/src/main/jniLibs/arm64-v8a"
+    local missing=()
+    for lib in libcrypto.so libssl.so libopenal.so; do
+        [[ -f "$dir/$lib" ]] || missing+=("$lib")
+    done
+    if ((${#missing[@]} > 0)); then
+        echo "Missing native runtime libs: ${missing[*]}" >&2
+        echo "Build them with: cd native-deps && ANDROID_NDK_HOME=\$ANDROID_HOME/ndk/<version> ./build-all.sh" >&2
+        exit 1
+    fi
+}
+
 cmd_build() {
+    ensure_native_deps
     cd "$GRADLE_DIR"
     ./gradlew assembleDebug
     echo "APK: $APK"
