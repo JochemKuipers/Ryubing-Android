@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import org.ryubing.android.data.ControllerMappingRepository
 import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.GameEntry
 import org.ryubing.android.data.GameRepository
@@ -15,6 +16,7 @@ import org.ryubing.android.emu.EmulationSession
 sealed interface Screen {
     data object Library : Screen
     data object Settings : Screen
+    data object ControllerRemap : Screen
     data object Drivers : Screen
     data class Emulation(val game: GameEntry) : Screen
 }
@@ -23,8 +25,10 @@ sealed interface Screen {
 fun RyubingApp(
     gameRepository: GameRepository,
     settingsRepository: SettingsRepository,
+    mappingRepository: ControllerMappingRepository,
     driverRepository: DriverRepository,
     session: EmulationSession,
+    onControllerMappingChanged: () -> Unit,
 ) {
     var screen: Screen by remember { mutableStateOf(Screen.Library) }
 
@@ -39,7 +43,14 @@ fun RyubingApp(
         is Screen.Settings -> SettingsScreen(
             repository = settingsRepository,
             session = session,
+            onOpenControllerRemap = { screen = Screen.ControllerRemap },
             onBack = { screen = Screen.Library },
+        )
+
+        is Screen.ControllerRemap -> ControllerRemapScreen(
+            mappingRepository = mappingRepository,
+            onBack = { screen = Screen.Settings },
+            onMappingChanged = onControllerMappingChanged,
         )
 
         is Screen.Drivers -> DriverManagerScreen(

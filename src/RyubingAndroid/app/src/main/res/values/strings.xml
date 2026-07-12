@@ -7,4 +7,5 @@
     <string name="no_games">No games yet. Add a folder containing your dumps.</string>
     <string name="import_driver">Import driver (.zip)</string>
     <string name="system_driver">System driver</string>
+    <string name="controller_remap_title">Controller mapping</string>
 </resources>

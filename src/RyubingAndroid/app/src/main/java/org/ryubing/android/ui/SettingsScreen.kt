@@ -42,7 +42,12 @@ import org.ryubing.android.emu.EmulationSession
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(repository: SettingsRepository, session: EmulationSession, onBack: () -> Unit) {
+fun SettingsScreen(
+    repository: SettingsRepository,
+    session: EmulationSession,
+    onOpenControllerRemap: () -> Unit,
+    onBack: () -> Unit,
+) {
     var config by remember { mutableStateOf(repository.load()) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -99,9 +104,11 @@ fun SettingsScreen(repository: SettingsRepository, session: EmulationSession, on
 
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
             Text("Input", style = MaterialTheme.typography.titleMedium)
-            SwitchRow("Switch button layout (A/B/X/Y)", config.useSwitchLayout) {
-                update(config.copy(useSwitchLayout = it))
-                (context as? org.ryubing.android.MainActivity)?.refreshPhysicalGamepad()
+            Button(
+                onClick = onOpenControllerRemap,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            ) {
+                Text(stringResource(R.string.controller_remap_title))
             }
             SwitchRow("On-screen touch controls", config.showTouchControls) {
                 update(config.copy(showTouchControls = it))

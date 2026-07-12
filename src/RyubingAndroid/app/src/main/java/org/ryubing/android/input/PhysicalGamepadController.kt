@@ -8,17 +8,26 @@ import kotlin.math.abs
 
 /**
  * Maps Android gamepad key/motion events (built-in handheld controls, Bluetooth pads)
- * into [EmulationSession] input for the virtual Switch controller.
+ * into [EmulationSession] input using a user-defined [ControllerMapping].
  */
 class PhysicalGamepadController(
     private val session: EmulationSession,
-    private val useSwitchLayout: Boolean,
+    mapping: ControllerMapping,
 ) {
     private var leftTriggerPressed = false
     private var rightTriggerPressed = false
+    private var mappingHolder: ControllerMapping = mapping
+
+    fun updateMapping(mapping: ControllerMapping) {
+        leftTriggerPressed = false
+        rightTriggerPressed = false
+        mappingHolder = mapping
+    }
 
     fun onKeyEvent(event: KeyEvent): Boolean {
-        val button = mapKeyCode(event.keyCode) ?: return false
+        if (ControllerKeyCapture.isActive) return false
+
+        val button = mappingHolder.switchButtonForKey(event.keyCode) ?: return false
         if ((event.flags and KeyEvent.FLAG_FALLBACK) != 0) return false
 
         when (event.action) {
@@ -30,12 +39,14 @@ class PhysicalGamepadController(
     }
 
     fun onMotionEvent(event: MotionEvent) {
+        if (ControllerKeyCapture.isActive) return
         if (event.action != MotionEvent.ACTION_MOVE &&
             event.action != MotionEvent.ACTION_HOVER_MOVE
         ) {
             return
         }
 
+        val m = mappingHolder
         val device = event.device
         val source = InputDevice.SOURCE_JOYSTICK
 
@@ -50,8 +61,11 @@ class PhysicalGamepadController(
         val rightX = if (hasAxis(rightXAxis)) axisValue(rightXAxis) else 0f
         val rightY = if (hasAxis(rightYAxis)) axisValue(rightYAxis) else 0f
 
-        session.setStick(false, leftX, -leftY)
-        session.setStick(true, rightX, -rightY)
+        val leftStickY = if (m.invertLeftStickY) -leftY else leftY
+        val rightStickY = if (m.invertRightStickY) -rightY else rightY
+
+        session.setStick(false, leftX, leftStickY)
+        session.setStick(true, rightX, rightStickY)
 
         val rightStickUsesZ = rightXAxis == MotionEvent.AXIS_Z
         val rightStickUsesRz = rightYAxis == MotionEvent.AXIS_RZ
@@ -75,7 +89,7 @@ class PhysicalGamepadController(
         updateTrigger(lt, true)
         updateTrigger(rt, false)
 
-        device?.let { updateDpadHat(event, it) }
+        device?.let { updateDpadHat(event, it, m) }
     }
 
     private fun updateTrigger(value: Float, left: Boolean) {
@@ -93,40 +107,16 @@ class PhysicalGamepadController(
         }
     }
 
-    private fun updateDpadHat(event: MotionEvent, device: InputDevice) {
+    private fun updateDpadHat(event: MotionEvent, device: InputDevice, m: ControllerMapping) {
         if (device.sources and InputDevice.SOURCE_DPAD != 0) return
 
         val hor = event.getAxisValue(MotionEvent.AXIS_HAT_X)
         val vert = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
 
-        session.setButton(SwitchButton.DpadUp, vert < 0f)
-        session.setButton(SwitchButton.DpadDown, vert > 0f)
-        session.setButton(SwitchButton.DpadLeft, hor < 0f)
-        session.setButton(SwitchButton.DpadRight, hor > 0f)
-    }
-
-    private fun mapKeyCode(keyCode: Int): SwitchButton? = when (keyCode) {
-        KeyEvent.KEYCODE_BUTTON_A ->
-            if (useSwitchLayout) SwitchButton.B else SwitchButton.A
-        KeyEvent.KEYCODE_BUTTON_B ->
-            if (useSwitchLayout) SwitchButton.A else SwitchButton.B
-        KeyEvent.KEYCODE_BUTTON_X ->
-            if (useSwitchLayout) SwitchButton.Y else SwitchButton.X
-        KeyEvent.KEYCODE_BUTTON_Y ->
-            if (useSwitchLayout) SwitchButton.X else SwitchButton.Y
-        KeyEvent.KEYCODE_BUTTON_L1 -> SwitchButton.LeftShoulder
-        KeyEvent.KEYCODE_BUTTON_L2 -> SwitchButton.LeftTrigger
-        KeyEvent.KEYCODE_BUTTON_R1 -> SwitchButton.RightShoulder
-        KeyEvent.KEYCODE_BUTTON_R2 -> SwitchButton.RightTrigger
-        KeyEvent.KEYCODE_BUTTON_THUMBL, KeyEvent.KEYCODE_BUTTON_11 -> SwitchButton.LeftStick
-        KeyEvent.KEYCODE_BUTTON_THUMBR, KeyEvent.KEYCODE_BUTTON_12 -> SwitchButton.RightStick
-        KeyEvent.KEYCODE_DPAD_UP -> SwitchButton.DpadUp
-        KeyEvent.KEYCODE_DPAD_DOWN -> SwitchButton.DpadDown
-        KeyEvent.KEYCODE_DPAD_LEFT -> SwitchButton.DpadLeft
-        KeyEvent.KEYCODE_DPAD_RIGHT -> SwitchButton.DpadRight
-        KeyEvent.KEYCODE_BUTTON_START -> SwitchButton.Plus
-        KeyEvent.KEYCODE_BUTTON_SELECT -> SwitchButton.Minus
-        else -> null
+        m.keyFor(SwitchButton.DpadUp)?.let { session.setButton(SwitchButton.DpadUp, vert < 0f) }
+        m.keyFor(SwitchButton.DpadDown)?.let { session.setButton(SwitchButton.DpadDown, vert > 0f) }
+        m.keyFor(SwitchButton.DpadLeft)?.let { session.setButton(SwitchButton.DpadLeft, hor < 0f) }
+        m.keyFor(SwitchButton.DpadRight)?.let { session.setButton(SwitchButton.DpadRight, hor > 0f) }
     }
 
     private companion object {
