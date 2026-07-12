@@ -21,6 +21,8 @@ class SettingsRepository(context: Context) {
         enableShaderCache = prefs.getBoolean(KEY_SHADER_CACHE, true),
         backendThreading = prefs.getInt(KEY_BACKEND_THREADING, 0),
         resScale = prefs.getFloat(KEY_RES_SCALE, 1f),
+        useSwitchLayout = prefs.getBoolean(KEY_SWITCH_LAYOUT, true),
+        showTouchControls = prefs.getBoolean(KEY_TOUCH_CONTROLS, true),
     )
 
     fun save(config: EmulatorConfig) = prefs.edit {
@@ -33,6 +35,8 @@ class SettingsRepository(context: Context) {
         putBoolean(KEY_SHADER_CACHE, config.enableShaderCache)
         putInt(KEY_BACKEND_THREADING, config.backendThreading)
         putFloat(KEY_RES_SCALE, config.resScale)
+        putBoolean(KEY_SWITCH_LAYOUT, config.useSwitchLayout)
+        putBoolean(KEY_TOUCH_CONTROLS, config.showTouchControls)
     }
 
     private companion object {
@@ -45,5 +49,7 @@ class SettingsRepository(context: Context) {
         const val KEY_SHADER_CACHE = "shader_cache"
         const val KEY_BACKEND_THREADING = "backend_threading"
         const val KEY_RES_SCALE = "res_scale"
+        const val KEY_SWITCH_LAYOUT = "switch_layout"
+        const val KEY_TOUCH_CONTROLS = "touch_controls"
     }
 }

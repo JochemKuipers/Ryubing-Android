@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000009 Mon Sep 17 00:00:00 2001
+From: Jochem Kuipers <jochem@kuipers.cc>
+Date: Sun, 12 Jul 2026 02:50:00 +0200
+Subject: [PATCH 9/9] android: recover from surface lost during present
+
+On Android the ANativeWindow can become invalid while the GPU thread is
+still presenting (activity pause, resize settling, etc.). Treat
+ErrorSurfaceLostKhr like OutOfDate and skip 0x0 swapchain extents.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ src/Ryujinx.Graphics.Vulkan/Window.cs | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/Ryujinx.Graphics.Vulkan/Window.cs b/src/Ryujinx.Graphics.Vulkan/Window.cs
+index d8f853729..fa1288911 100644
+--- a/src/Ryujinx.Graphics.Vulkan/Window.cs
++++ b/src/Ryujinx.Graphics.Vulkan/Window.cs
+@@ -123,6 +123,12 @@ namespace Ryujinx.Graphics.Vulkan
+ 
+             Extent2D extent = ChooseSwapExtent(capabilities);
+ 
++            if (extent.Width == 0 || extent.Height == 0)
++            {
++                _swapchainIsDirty = true;
++                return;
++            }
++
+             _width = (int)extent.Width;
+             _height = (int)extent.Height;
+             _format = surfaceFormat.Format;
+@@ -335,6 +341,7 @@ namespace Ryujinx.Graphics.Vulkan
+ 
+                 if (acquireResult == Result.ErrorOutOfDateKhr ||
+                     acquireResult == Result.SuboptimalKhr ||
++                    acquireResult == Result.ErrorSurfaceLostKhr ||
+                     _swapchainIsDirty)
+                 {
+                     RecreateSwapchain();

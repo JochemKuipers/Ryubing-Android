@@ -1,0 +1,25 @@
+diff --git a/src/Ryujinx.Graphics.Vulkan/Window.cs b/src/Ryujinx.Graphics.Vulkan/Window.cs
+index d8f853729..fa1288911 100644
+--- a/src/Ryujinx.Graphics.Vulkan/Window.cs
++++ b/src/Ryujinx.Graphics.Vulkan/Window.cs
+@@ -122,6 +122,12 @@ namespace Ryujinx.Graphics.Vulkan
+ 
+             Extent2D extent = ChooseSwapExtent(capabilities);
+ 
++            if (extent.Width == 0 || extent.Height == 0)
++            {
++                _swapchainIsDirty = true;
++                return;
++            }
++
+             _width = (int)extent.Width;
+             _height = (int)extent.Height;
+             _format = surfaceFormat.Format;
+@@ -335,6 +341,7 @@ namespace Ryujinx.Graphics.Vulkan
+ 
+                 if (acquireResult == Result.ErrorOutOfDateKhr ||
+                     acquireResult == Result.SuboptimalKhr ||
++                    acquireResult == Result.ErrorSurfaceLostKhr ||
+                     _swapchainIsDirty)
+                 {
+                     RecreateSwapchain();

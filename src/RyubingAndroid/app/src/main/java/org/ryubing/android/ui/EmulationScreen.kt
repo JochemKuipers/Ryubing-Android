@@ -56,6 +56,7 @@ fun EmulationScreen(
         }
 
         onDispose {
+            session.stop()
             session.setSurface(null)
             activity?.let { host ->
                 insetsController?.show(WindowInsetsCompat.Type.systemBars())
@@ -90,6 +91,7 @@ fun EmulationScreen(
                         }
 
                         override fun surfaceDestroyed(holder: SurfaceHolder) {
+                            session.stop()
                             session.setSurface(null)
                         }
                     })
@@ -97,11 +99,13 @@ fun EmulationScreen(
             },
         )
 
-        TouchControls(
-            modifier = Modifier.fillMaxSize(),
-            onButton = session::setButton,
-            onStick = session::setStick,
-        )
+        if (config.showTouchControls) {
+            TouchControls(
+                modifier = Modifier.fillMaxSize(),
+                onButton = session::setButton,
+                onStick = session::setStick,
+            )
+        }
     }
 }
 
@@ -165,7 +169,6 @@ private fun startStabilizedResize(
             attempts++
             if ((stableCount >= 1 || attempts >= 12) && width > 0 && height > 0) {
                 session.setWindowSize(width, height)
-                handler.postDelayed({ session.setWindowSize(width, height) }, 32)
                 return
             }
 

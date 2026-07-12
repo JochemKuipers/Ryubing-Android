@@ -4,7 +4,7 @@
   "upstream_branch": "master",
   "upstream_tag": "Canary-1.3.335",
   "upstream_commit": "dc06d0ded61f65256f06f08f39df2e9f089c8b2f",
-  "patches_applied": 8,
+  "patches_applied": 9,
   "known_breakages": [],
   "smoke_tests_passed": [],
   "notes": [

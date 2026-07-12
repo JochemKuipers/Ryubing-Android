@@ -21,6 +21,7 @@ JavaVM *g_vm = nullptr;
 ANativeWindow *g_window = nullptr;
 void *g_vulkan_driver = nullptr;
 int32_t g_pending_transform = -1;
+int32_t g_last_applied_transform = -1;
 
 using SetBuffersTransformFn = int32_t (*)(ANativeWindow *, int32_t);
 
@@ -35,6 +36,10 @@ constexpr bool kInitialOrientationFlipped = true;
 
 void ApplyCurrentTransform(ANativeWindow *window, int32_t transform) {
     if (window == nullptr) {
+        return;
+    }
+
+    if (transform == g_last_applied_transform) {
         return;
     }
 
@@ -68,6 +73,7 @@ void ApplyCurrentTransform(ANativeWindow *window, int32_t transform) {
     }
 
     setTransform(window, nativeTransform);
+    g_last_applied_transform = transform;
 }
 
 int32_t AndroidRotationToTransform(int androidRotation) {
@@ -153,6 +159,8 @@ Java_org_ryubing_android_RyubingNative_setSurface(JNIEnv *env, jclass, jobject s
         }
         LOGI("ANativeWindow acquired: %p", g_window);
     } else {
+        g_pending_transform = -1;
+        g_last_applied_transform = -1;
         LOGI("Surface cleared");
     }
 }

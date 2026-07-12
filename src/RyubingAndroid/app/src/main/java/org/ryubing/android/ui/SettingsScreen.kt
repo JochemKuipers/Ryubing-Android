@@ -97,9 +97,21 @@ fun SettingsScreen(repository: SettingsRepository, session: EmulationSession, on
             SwitchRow("Enable PPTC (experimental on mobile)", config.enablePptc) { update(config.copy(enablePptc = it)) }
             SwitchRow("Shader cache", config.enableShaderCache) { update(config.copy(enableShaderCache = it)) }
 
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            Text("Input", style = MaterialTheme.typography.titleMedium)
+            SwitchRow("Switch button layout (A/B/X/Y)", config.useSwitchLayout) {
+                update(config.copy(useSwitchLayout = it))
+                (context as? org.ryubing.android.MainActivity)?.refreshPhysicalGamepad()
+            }
+            SwitchRow("On-screen touch controls", config.showTouchControls) {
+                update(config.copy(showTouchControls = it))
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            Text("Graphics", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Memory manager: ${memoryModeLabel(config.memoryManagerMode)}",
-                Modifier.padding(vertical = 12.dp),
+                Modifier.padding(vertical = 4.dp),
             )
             Text(
                 "Resolution scale: ${config.resScale}x",

@@ -33,6 +33,8 @@ class EmulationSession(
     // The ROM is opened via SAF; the descriptor must stay open for the whole session because
     // the core reads content from it on demand (the fd path below points at this descriptor).
     @Volatile private var romFd: ParcelFileDescriptor? = null
+    private var lastWindowWidth = 0
+    private var lastWindowHeight = 0
 
     fun initialize() {
         if (initialized) return
@@ -56,7 +58,9 @@ class EmulationSession(
     fun setSurfaceRotation(rotation: Int) = RyubingNative.setSurfaceRotation(rotation)
 
     fun setWindowSize(width: Int, height: Int) {
-        if (width > 0 && height > 0) {
+        if (width > 0 && height > 0 && (width != lastWindowWidth || height != lastWindowHeight)) {
+            lastWindowWidth = width
+            lastWindowHeight = height
             RyubingNative.core.ryubing_set_window_size(width, height)
         }
     }
@@ -162,6 +166,8 @@ class EmulationSession(
 
     fun stop() {
         if (initialized) RyubingNative.core.ryubing_stop()
+        lastWindowWidth = 0
+        lastWindowHeight = 0
         closeRomFd()
     }
 

@@ -17,6 +17,7 @@ using Ryujinx.HLE.FileSystem;
 using Ryujinx.HLE.HOS;
 using Ryujinx.HLE.HOS.Services.Account.Acc;
 using Ryujinx.HLE.HOS.SystemState;
+using Ryujinx.Input;
 using Ryujinx.Input.HLE;
 using Silk.NET.Vulkan;
 using System;
@@ -41,6 +42,7 @@ namespace LibRyubing
         private static AccountManager _accountManager;
         private static UserChannelPersistence _userChannelPersistence;
         private static InputManager _inputManager;
+        private static NpadManager _npadManager;
         private static AndroidGamepadDriver _gamepadDriver;
         private static AndroidHostUIHandler _uiHandler;
 
@@ -103,6 +105,7 @@ namespace LibRyubing
             // No hardware keyboard on Android; reuse the gamepad driver as the keyboard
             // slot so NpadManager has both handles (touch keyboard is handled by the applet).
             _inputManager = new InputManager(_gamepadDriver, _gamepadDriver);
+            _npadManager = _inputManager.CreateNpadManager();
 
             _uiHandler = new AndroidHostUIHandler(_accountManager);
 
@@ -206,6 +209,9 @@ namespace LibRyubing
             }
 
             SetupProgressHandler();
+            _npadManager?.Dispose();
+            _npadManager = _inputManager.CreateNpadManager();
+            _npadManager.Initialize(_device, AndroidInputDefaults.CreateDefaultConfigs(), enableKeyboard: false, enableMouse: false);
             StartGpuLoop();
             return true;
         }
@@ -346,6 +352,8 @@ namespace LibRyubing
                             break;
                         }
 
+                        _npadManager?.Update();
+
                         ticks += chrono.ElapsedTicks;
                         chrono.Restart();
 
@@ -414,6 +422,9 @@ namespace LibRyubing
             _gpuThread?.Join(TimeSpan.FromSeconds(5));
             _gpuThread = null;
 
+            _npadManager?.Dispose();
+            _npadManager = null;
+
             _device?.Dispose();
             _device = null;
         }
@@ -423,6 +434,8 @@ namespace LibRyubing
             Stop();
             _vulkanLoader?.Dispose();
             _vulkanLoader = null;
+            _npadManager?.Dispose();
+            _npadManager = null;
             _inputManager?.Dispose();
             _virtualFileSystem?.Dispose();
         }

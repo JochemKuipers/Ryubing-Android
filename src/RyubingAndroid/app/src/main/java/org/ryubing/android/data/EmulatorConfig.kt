@@ -20,4 +20,7 @@ data class EmulatorConfig(
     val enableShaderCache: Boolean = true,
     val backendThreading: Int = 0,      // Auto
     val resScale: Float = 1f,
+    /** When true, face buttons follow Switch layout (recommended for Nintendo titles). */
+    val useSwitchLayout: Boolean = true,
+    val showTouchControls: Boolean = true,
 )
