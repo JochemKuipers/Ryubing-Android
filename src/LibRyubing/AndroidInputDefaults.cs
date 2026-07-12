@@ -1,3 +1,4 @@
+using LibRyubing.Input;
 using Ryujinx.Common.Configuration.Hid;
 using Ryujinx.Common.Configuration.Hid.Controller;
 using Ryujinx.Input;
