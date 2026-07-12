@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.os.Handler
 import android.os.Looper
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.activity.ComponentActivity
@@ -111,18 +112,68 @@ private fun updateSurface(
     fallbackWidth: Int,
     fallbackHeight: Int,
 ) {
+    @Suppress("DEPRECATION")
+    val rotation = activity.windowManager.defaultDisplay.rotation
+    session.setSurfaceRotation(rotation)
     session.setSurface(holder.surface)
+    startStabilizedResize(session, holder, fallbackWidth, fallbackHeight, rotation)
+}
 
-    val width = holder.surfaceFrame.width().takeIf { it > 0 } ?: fallbackWidth
-    val height = holder.surfaceFrame.height().takeIf { it > 0 } ?: fallbackHeight
-    session.setWindowSize(width, height)
+private fun startStabilizedResize(
+    session: EmulationSession,
+    holder: SurfaceHolder,
+    fallbackWidth: Int,
+    fallbackHeight: Int,
+    expectedRotation: Int,
+) {
+    val handler = Handler(Looper.getMainLooper())
+    var attempts = 0
+    var stableCount = 0
+    var lastW = -1
+    var lastH = -1
 
-    // Swapchain extent can lag one frame after the activity rotates; kick again once settled.
-    if (width > 0 && height > 0) {
-        Handler(Looper.getMainLooper()).postDelayed({
-            val w = holder.surfaceFrame.width().takeIf { it > 0 } ?: fallbackWidth
-            val h = holder.surfaceFrame.height().takeIf { it > 0 } ?: fallbackHeight
-            session.setWindowSize(w, h)
-        }, 32)
+    val task = object : Runnable {
+        override fun run() {
+            var width = holder.surfaceFrame.width()
+            var height = holder.surfaceFrame.height()
+            if (width <= 0 || height <= 0) {
+                width = fallbackWidth
+                height = fallbackHeight
+            }
+
+            // Portrait-native panels forced to landscape can briefly report swapped dims.
+            val landscape = expectedRotation == Surface.ROTATION_90 ||
+                expectedRotation == Surface.ROTATION_270
+            if (landscape && height > width) {
+                val swap = width
+                width = height
+                height = swap
+            } else if (!landscape && width > height) {
+                val swap = width
+                width = height
+                height = swap
+            }
+
+            if (width == lastW && height == lastH && width > 0 && height > 0) {
+                stableCount++
+            } else {
+                stableCount = 0
+                lastW = width
+                lastH = height
+            }
+
+            attempts++
+            if ((stableCount >= 1 || attempts >= 12) && width > 0 && height > 0) {
+                session.setWindowSize(width, height)
+                handler.postDelayed({ session.setWindowSize(width, height) }, 32)
+                return
+            }
+
+            if (attempts < 12) {
+                handler.postDelayed(this, 16)
+            }
+        }
     }
+
+    handler.post(task)
 }

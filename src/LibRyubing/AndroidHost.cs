@@ -358,7 +358,14 @@ namespace LibRyubing
 
                         while (_device.ConsumeFrameAvailable())
                         {
-                            _device.PresentFrame(static () => { });
+                            _device.PresentFrame(() =>
+                            {
+                                if (_device.Gpu.Renderer is ThreadedRenderer threaded
+                                    && threaded.BaseRenderer is VulkanRenderer vulkanRenderer)
+                                {
+                                    NativeJni.SetCurrentTransform((int)vulkanRenderer.CurrentTransform);
+                                }
+                            });
                         }
 
                         if (ticks >= ticksPerFrame)

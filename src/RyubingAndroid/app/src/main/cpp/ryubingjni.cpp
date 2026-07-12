@@ -20,7 +20,7 @@ namespace {
 JavaVM *g_vm = nullptr;
 ANativeWindow *g_window = nullptr;
 void *g_vulkan_driver = nullptr;
-int g_surface_rotation = 0;
+int32_t g_pending_transform = -1;
 
 using SetBuffersTransformFn = int32_t (*)(ANativeWindow *, int32_t);
 
@@ -30,7 +30,10 @@ SetBuffersTransformFn GetSetBuffersTransformFn() {
     return fn;
 }
 
-void ApplyNativeWindowTransform(ANativeWindow *window, int /*androidRotation*/) {
+// Portrait-native handheld panels (AYN Thor, etc.) use a flipped natural orientation.
+constexpr bool kInitialOrientationFlipped = true;
+
+void ApplyCurrentTransform(ANativeWindow *window, int32_t transform) {
     if (window == nullptr) {
         return;
     }
@@ -40,11 +43,54 @@ void ApplyNativeWindowTransform(ANativeWindow *window, int /*androidRotation*/) 
         return;
     }
 
-    // Vulkan already honors SurfaceCapabilities.CurrentTransform via swapchain
-    // preTransform. Applying a matching buffer rotation here double-rotates output.
-    setTransform(window, ANATIVEWINDOW_TRANSFORM_IDENTITY);
+    int32_t nativeTransform = ANATIVEWINDOW_TRANSFORM_IDENTITY;
+    transform = transform >> 1;
+
+    // Map VkSurfaceTransformFlagBitsKHR (after >> 1) to ANativeWindow transform.
+    switch (transform) {
+        case 0x1:
+            nativeTransform = ANATIVEWINDOW_TRANSFORM_IDENTITY;
+            break;
+        case 0x2:
+            nativeTransform = ANATIVEWINDOW_TRANSFORM_ROTATE_90;
+            break;
+        case 0x4:
+            nativeTransform = kInitialOrientationFlipped
+                                  ? ANATIVEWINDOW_TRANSFORM_IDENTITY
+                                  : ANATIVEWINDOW_TRANSFORM_ROTATE_180;
+            break;
+        case 0x8:
+            nativeTransform = ANATIVEWINDOW_TRANSFORM_ROTATE_270;
+            break;
+        default:
+            nativeTransform = ANATIVEWINDOW_TRANSFORM_IDENTITY;
+            break;
+    }
+
+    setTransform(window, nativeTransform);
+}
+
+int32_t AndroidRotationToTransform(int androidRotation) {
+    switch (androidRotation) {
+        case 0:
+            return 0;
+        case 1:
+            return 4;
+        case 2:
+            return 3;
+        case 3:
+            return 7;
+        default:
+            return 0;
+    }
 }
 } // namespace
+
+extern "C" void ryubingjni_set_current_transform(int transform) {
+    if (g_window != nullptr) {
+        ApplyCurrentTransform(g_window, transform);
+    }
+}
 
 static char *GetStringUtf8(JNIEnv *env, jstring value) {
     if (value == nullptr) {
@@ -64,6 +110,10 @@ extern "C" uint64_t ryubingjni_create_surface(void *instanceHandle) {
     if (g_window == nullptr) {
         LOGE("create_surface called with no ANativeWindow set");
         return 0;
+    }
+
+    if (g_pending_transform >= 0) {
+        ApplyCurrentTransform(g_window, g_pending_transform);
     }
 
     auto instance = reinterpret_cast<VkInstance>(instanceHandle);
@@ -98,7 +148,9 @@ Java_org_ryubing_android_RyubingNative_setSurface(JNIEnv *env, jclass, jobject s
 
     if (surface != nullptr) {
         g_window = ANativeWindow_fromSurface(env, surface);
-        ApplyNativeWindowTransform(g_window, g_surface_rotation);
+        if (g_pending_transform >= 0) {
+            ApplyCurrentTransform(g_window, g_pending_transform);
+        }
         LOGI("ANativeWindow acquired: %p", g_window);
     } else {
         LOGI("Surface cleared");
@@ -107,9 +159,9 @@ Java_org_ryubing_android_RyubingNative_setSurface(JNIEnv *env, jclass, jobject s
 
 JNIEXPORT void JNICALL
 Java_org_ryubing_android_RyubingNative_setSurfaceRotation(JNIEnv *, jclass, jint rotation) {
-    g_surface_rotation = rotation;
+    g_pending_transform = AndroidRotationToTransform(rotation);
     if (g_window != nullptr) {
-        ApplyNativeWindowTransform(g_window, g_surface_rotation);
+        ApplyCurrentTransform(g_window, g_pending_transform);
     }
 }
 

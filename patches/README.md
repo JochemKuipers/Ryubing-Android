@@ -45,7 +45,7 @@ Name format: `NNNN-short-description.patch` (kept in order by `NNNN`).
 
 ## Current queue
 
-Seven patches ported from [Kenji-NX `libryujinx_bionic`](https://git.ryujinx.app/projects/Kenji-NX/src/branch/libryujinx_bionic) onto the Ryubing pin (`dc06d0de` / Canary-1.3.335). The phantom upstream commits cited in older pins never landed on Ryubing master. Patches 0006–0007 are Ryubing-native (NativeAOT shader SSA crash).
+Seven patches ported from [Kenji-NX `libryujinx_bionic`](https://git.ryujinx.app/projects/Kenji-NX/src/branch/libryujinx_bionic) onto the Ryubing pin (`dc06d0de` / Canary-1.3.335). The phantom upstream commits cited in older pins never landed on Ryubing master. Patches 0006–0007 are Ryubing-native (NativeAOT shader SSA crash). Patch 0008 adds Kenji-style Android surface rotation (identity Vulkan preTransform + buffer transform in the JNI shim).
 
 | Patch | Concern |
 |-------|---------|
@@ -56,5 +56,6 @@ Seven patches ported from [Kenji-NX `libryujinx_bionic`](https://git.ryujinx.app
 | `0005-android-bionic-sigaction-layout-and-signal-handler.patch` | Bionic `sigaction` struct layout, siginfo offsets, alternate stack helpers |
 | `0006-android-hoist-ssa-rename-local-functions-for-NativeAOT.patch` | Hoist `Ssa.Rename` nested locals to static methods (NativeAOT codegen fix) |
 | `0007-android-add-SSA-bounds-checks-and-skip-zero-predicat.patch` | Bounds-check `LocalDefMap` keys; skip RZ/PT dest registers (NativeAOT AV fix) |
+| `0008-android-vulkan-identity-pretransform-and-surface.patch` | Identity swapchain preTransform on bionic; expose `CurrentTransform` for JNI buffer sync |
 
 `LibRyubing` still sets `PlatformInfo.IsBionic = true` at init (adapter layer).

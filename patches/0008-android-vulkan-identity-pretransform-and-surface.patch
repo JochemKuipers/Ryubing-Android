@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000008 Mon Sep 17 00:00:00 2001
+From: Jochem Kuipers <jochem@kuipers.cc>
+Date: Sun, 12 Jul 2026 02:40:00 +0200
+Subject: [PATCH 8/8] android: use identity swapchain preTransform on bionic
+
+Portrait-native handheld panels (AYN Thor, etc.) force landscape in the
+app while the compositor still reports a non-identity CurrentTransform.
+Kenji-NX renders with Identity preTransform and applies rotation via
+ANativeWindow buffer transform instead; mirror that split here.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ src/Ryujinx.Graphics.Vulkan/VulkanRenderer.cs | 2 ++
+ src/Ryujinx.Graphics.Vulkan/Window.cs          | 9 ++++++++-
+ src/Ryujinx.Graphics.Vulkan/WindowBase.cs       | 3 +++
+ 3 files changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/src/Ryujinx.Graphics.Vulkan/VulkanRenderer.cs b/src/Ryujinx.Graphics.Vulkan/VulkanRenderer.cs
+index d2170a682..ca418dcf1 100644
+--- a/src/Ryujinx.Graphics.Vulkan/VulkanRenderer.cs
++++ b/src/Ryujinx.Graphics.Vulkan/VulkanRenderer.cs
+@@ -80,6 +80,8 @@ namespace Ryujinx.Graphics.Vulkan
+ 
+         public IWindow Window => _window;
+ 
++        public SurfaceTransformFlagsKHR CurrentTransform => _window.CurrentTransform;
++
+         private readonly Func<Instance, Vk, SurfaceKHR> _getSurface;
+         private readonly Func<string[]> _getRequiredExtensions;
+         private readonly string _preferredGpuId;
+diff --git a/src/Ryujinx.Graphics.Vulkan/Window.cs b/src/Ryujinx.Graphics.Vulkan/Window.cs
+index eb8d433be..d8f853729 100644
+--- a/src/Ryujinx.Graphics.Vulkan/Window.cs
++++ b/src/Ryujinx.Graphics.Vulkan/Window.cs
+@@ -1,3 +1,4 @@
++using Ryujinx.Common;
+ using Ryujinx.Common.Configuration;
+ using Ryujinx.Graphics.GAL;
+ using Ryujinx.Graphics.Vulkan.Effects;
+@@ -125,6 +126,12 @@ namespace Ryujinx.Graphics.Vulkan
+             _height = (int)extent.Height;
+             _format = surfaceFormat.Format;
+ 
++            CurrentTransform = capabilities.CurrentTransform;
++
++            SurfaceTransformFlagsKHR preTransform = PlatformInfo.IsBionic
++                ? SurfaceTransformFlagsKHR.IdentityBitKhr
++                : capabilities.CurrentTransform;
++
+             SwapchainKHR oldSwapchain = _swapchain;
+ 
+             SwapchainCreateInfoKHR swapchainCreateInfo = new()
+@@ -138,7 +145,7 @@ namespace Ryujinx.Graphics.Vulkan
+                 ImageUsage = ImageUsageFlags.ColorAttachmentBit | ImageUsageFlags.TransferDstBit | ImageUsageFlags.StorageBit,
+                 ImageSharingMode = SharingMode.Exclusive,
+                 ImageArrayLayers = 1,
+-                PreTransform = capabilities.CurrentTransform,
++                PreTransform = preTransform,
+                 CompositeAlpha = ChooseCompositeAlpha(capabilities.SupportedCompositeAlpha),
+                 PresentMode = ChooseSwapPresentMode(presentModes, _vSyncMode),
+                 Clipped = true,
+diff --git a/src/Ryujinx.Graphics.Vulkan/WindowBase.cs b/src/Ryujinx.Graphics.Vulkan/WindowBase.cs
+index 34ac63a83..1028d9c21 100644
+--- a/src/Ryujinx.Graphics.Vulkan/WindowBase.cs
++++ b/src/Ryujinx.Graphics.Vulkan/WindowBase.cs
+@@ -1,5 +1,6 @@
+ using Ryujinx.Common.Configuration;
+ using Ryujinx.Graphics.GAL;
++using Silk.NET.Vulkan;
+ using System;
+ 
+ namespace Ryujinx.Graphics.Vulkan
+@@ -8,6 +9,8 @@ namespace Ryujinx.Graphics.Vulkan
+     {
+         public bool ScreenCaptureRequested { get; set; }
+ 
++        public SurfaceTransformFlagsKHR CurrentTransform { get; set; }
++
+         public abstract void Dispose();
+         public abstract void Present(ITexture texture, ImageCrop crop, Action swapBuffersCallback);
+         public abstract void SetSize(int width, int height);
+-- 
+2.49.0
