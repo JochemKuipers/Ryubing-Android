@@ -18,5 +18,6 @@
 
   // Android extension defaults assume workspaceRoot/app/src/main; fix for monorepo layout.
   "android-dev-ext.appSourceRoot": "src/RyubingAndroid/app/src/main",
-  "android-dev-ext.trace": true
+  "android-dev-ext.trace": true,
+  "java.configuration.updateBuildConfiguration": "automatic"
 }

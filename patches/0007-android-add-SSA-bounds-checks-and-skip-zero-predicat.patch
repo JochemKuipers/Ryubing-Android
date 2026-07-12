@@ -1,0 +1,198 @@
+From 0000000000000000000000000000000000000007 Mon Sep 17 00:00:00 2001
+From: Jochem Kuipers <jochem@kuipers.cc>
+Date: Sun, 12 Jul 2026 02:18:00 +0200
+Subject: [PATCH 7/7] android: add SSA bounds checks and skip zero/predicate-true dests
+
+NativeAOT on linux-bionic-arm64 can elide array bounds checks in
+Ssa.Rename LocalDefMap access, turning invalid register keys into
+AccessViolation. Validate keys and skip RZ/PT registers in SSA rename.
+
+---
+ .../Translation/Ssa.cs                        | 98 +++++++++++++++++--
+ 1 file changed, 90 insertions(+), 8 deletions(-)
+
+diff --git a/src/Ryujinx.Graphics.Shader/Translation/Ssa.cs b/src/Ryujinx.Graphics.Shader/Translation/Ssa.cs
+index 187d5864a..a1b2c3d4e 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/Ssa.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/Ssa.cs
+@@ -1,5 +1,6 @@
+ using Ryujinx.Graphics.Shader.Decoders;
+ using Ryujinx.Graphics.Shader.IntermediateRepresentation;
++using System;
+ using System.Collections.Generic;
+ using static Ryujinx.Graphics.Shader.IntermediateRepresentation.OperandHelper;
+ 
+@@ -76,13 +77,28 @@ namespace Ryujinx.Graphics.Shader.Translation
+ 
+             public Operand Get(int key)
+             {
++                if ((uint)key >= (uint)RegisterConsts.TotalCount)
++                {
++                    throw new IndexOutOfRangeException($"SSA local lookup key {key} is out of range.");
++                }
++
+                 return _map[key];
+             }
+ 
+             public void Add(int key, Operand operand)
+             {
++                if ((uint)key >= (uint)RegisterConsts.TotalCount)
++                {
++                    throw new IndexOutOfRangeException($"SSA local def key {key} is out of range.");
++                }
++
+                 if (_map[key] == null)
+                 {
++                    if (UseCount >= _uses.Length)
++                    {
++                        throw new InvalidOperationException("SSA local def map exhausted.");
++                    }
++
+                     _uses[UseCount++] = key;
+                 }
+ 
+@@ -91,6 +106,11 @@ namespace Ryujinx.Graphics.Shader.Translation
+ 
+             public Operand GetUse(int index, out int key)
+             {
++                if ((uint)index >= (uint)UseCount)
++                {
++                    throw new IndexOutOfRangeException($"SSA local use index {index} is out of range.");
++                }
++
+                 key = _uses[index];
+ 
+                 return _map[key];
+@@ -153,9 +173,16 @@ namespace Ryujinx.Graphics.Shader.Translation
+ 
+                             if (dest != null && dest.Type == OperandType.Register)
+                             {
++                                Register reg = dest.GetRegister();
++
++                                if (reg.IsRZ || reg.IsPT)
++                                {
++                                    continue;
++                                }
++
+                                 Operand local = Local();
+ 
+-                                localDefs.Add(GetKeyFromRegister(dest.GetRegister()), local);
++                                localDefs.Add(GetKeyFromRegister(reg), local);
+ 
+                                 operation.SetDest(index, local);
+                             }
+@@ -196,6 +223,11 @@ namespace Ryujinx.Graphics.Shader.Translation
+             {
+                 BasicBlock block = blocks[blkIndex];
+ 
++                if ((uint)block.Index >= (uint)globalDefs.Length)
++                {
++                    throw new IndexOutOfRangeException($"SSA block index {block.Index} is out of range.");
++                }
++
+                 for (LinkedListNode<INode> node = block.Operations.First; node != null; node = node.Next)
+                 {
+                     if (node.Value is Operation operation)
+@@ -218,7 +250,14 @@ namespace Ryujinx.Graphics.Shader.Translation
+         {
+             if (operand != null && operand.Type == OperandType.Register)
+             {
+-                Operand local = localDefs.Get(GetKeyFromRegister(operand.GetRegister()));
++                Register reg = operand.GetRegister();
++
++                if (reg.IsRZ || reg.IsPT)
++                {
++                    return operand;
++                }
++
++                Operand local = localDefs.Get(GetKeyFromRegister(reg));
+ 
+                 operand = local ?? operand;
+             }
+@@ -230,7 +269,14 @@ namespace Ryujinx.Graphics.Shader.Translation
+         {
+             if (operand != null && operand.Type == OperandType.Register)
+             {
+-                int key = GetKeyFromRegister(operand.GetRegister());
++                Register reg = operand.GetRegister();
++
++                if (reg.IsRZ || reg.IsPT)
++                {
++                    return operand;
++                }
++
++                int key = GetKeyFromRegister(reg);
+ 
+                 Operand local = localDefs.Get(key);
+ 
+@@ -239,7 +285,7 @@ namespace Ryujinx.Graphics.Shader.Translation
+                     return local;
+                 }
+ 
+-                operand = FindDefinitionForCurr(globalDefs, block, operand.GetRegister());
++                operand = FindDefinitionForCurr(globalDefs, block, reg);
+ 
+                 localDefs.Add(key, operand);
+             }
+@@ -342,22 +388,55 @@ namespace Ryujinx.Graphics.Shader.Translation
+ 
+         private static int GetKeyFromRegister(Register reg)
+         {
++            int key;
++
+             if (reg.Type == RegisterType.Gpr)
+             {
+-                return reg.Index;
++                if ((uint)reg.Index >= (uint)RegisterConsts.GprsCount)
++                {
++                    throw new ArgumentOutOfRangeException(nameof(reg), reg, "GPR index out of range for SSA.");
++                }
++
++                key = reg.Index;
+             }
+             else if (reg.Type == RegisterType.Predicate)
+             {
+-                return RegisterConsts.GprsCount + reg.Index;
++                if ((uint)reg.Index >= (uint)RegisterConsts.PredsCount)
++                {
++                    throw new ArgumentOutOfRangeException(nameof(reg), reg, "Predicate index out of range for SSA.");
++                }
++
++                key = RegisterConsts.GprsCount + reg.Index;
+             }
+-            else /* if (reg.Type == RegisterType.Flag) */
++            else if (reg.Type == RegisterType.Flag)
+             {
+-                return GprsAndPredsCount + reg.Index;
++                if ((uint)reg.Index >= (uint)RegisterConsts.FlagsCount)
++                {
++                    throw new ArgumentOutOfRangeException(nameof(reg), reg, "Flag index out of range for SSA.");
++                }
++
++                key = GprsAndPredsCount + reg.Index;
+             }
++            else
++            {
++                throw new ArgumentOutOfRangeException(nameof(reg), reg, "Unknown register type for SSA.");
++            }
++
++            if ((uint)key >= (uint)RegisterConsts.TotalCount)
++            {
++                throw new IndexOutOfRangeException($"SSA register key {key} is out of range.");
++            }
++
++            return key;
+         }
+ 
+         private static Register GetRegisterFromKey(int key)
+         {
++            if ((uint)key >= (uint)RegisterConsts.TotalCount)
++            {
++                throw new IndexOutOfRangeException($"SSA register key {key} is out of range.");
++            }
++
+             if (key < RegisterConsts.GprsCount)
+             {
+                 return new Register(key, RegisterType.Gpr);
+-- 
+2.55.0

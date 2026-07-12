@@ -1,0 +1,3061 @@
+From 1cc70f1c1ae5b131f63f152f9b2232d83315ce76 Mon Sep 17 00:00:00 2001
+From: Jochem Kuipers <jochem@kuipers.cc>
+Date: Sun, 12 Jul 2026 01:36:25 +0200
+Subject: [PATCH] android: ARMeilleure delegate registry for NativeAOT JIT
+ helpers
+
+Ported from Kenji-NX libryujinx_bionic: under ANDROID, JIT helper calls use
+explicit delegate function pointers instead of UnmanagedCallersOnly +
+MethodHandle.GetFunctionPointer(), which NativeAOT cannot rely on.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ src/ARMeilleure/Instructions/MathHelper.cs    |  44 ++
+ .../Instructions/NativeInterface.cs           | 101 ++-
+ .../SoftFallback/SoftFallback.Aes.cs          |  31 +-
+ .../SoftFallback/SoftFallback.Count.cs        |  17 +-
+ .../SoftFallback/SoftFallback.Crc32.cs        |  54 +-
+ .../SoftFallback/SoftFallback.Saturation.cs   |  59 +-
+ .../SoftFallback/SoftFallback.Sha1.cs         |  45 +-
+ .../SoftFallback/SoftFallback.Sha256.cs       |  31 +-
+ .../SoftFallback/SoftFallback.ShrImm64.cs     |  17 +-
+ .../SoftFallback/SoftFallback.Table.cs        |  59 +-
+ .../Instructions/SoftFallback/SoftFallback.cs |  10 +-
+ .../Instructions/SoftFloat/SoftFloat16_32.cs  |  10 +-
+ .../Instructions/SoftFloat/SoftFloat16_64.cs  |  10 +-
+ .../Instructions/SoftFloat/SoftFloat32.cs     | 297 ++++++---
+ .../Instructions/SoftFloat/SoftFloat32_16.cs  |  10 +-
+ .../Instructions/SoftFloat/SoftFloat64.cs     | 297 ++++++---
+ .../Instructions/SoftFloat/SoftFloat64_16.cs  |  10 +-
+ src/ARMeilleure/Translation/Delegates.cs      | 630 +++++++++++++++++-
+ src/ARMeilleure/Translation/EmitterContext.cs |  10 +-
+ 19 files changed, 1460 insertions(+), 282 deletions(-)
+
+diff --git a/src/ARMeilleure/Instructions/MathHelper.cs b/src/ARMeilleure/Instructions/MathHelper.cs
+index a11ce9d2e..4fbbc5457 100644
+--- a/src/ARMeilleure/Instructions/MathHelper.cs
++++ b/src/ARMeilleure/Instructions/MathHelper.cs
+@@ -1,35 +1,59 @@
+ using System;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static class MathHelper
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static double Abs(double value)
+         {
+             return Math.Abs(value);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static double Ceiling(double value)
+         {
+             return Math.Ceiling(value);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static double Floor(double value)
+         {
+             return Math.Floor(value);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static double Round(double value, int mode)
+         {
+             return Math.Round(value, (MidpointRounding)mode);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static double Truncate(double value)
+         {
+             return Math.Truncate(value);
+@@ -38,31 +62,51 @@ namespace ARMeilleure.Instructions
+ 
+     static class MathHelperF
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static float Abs(float value)
+         {
+             return MathF.Abs(value);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static float Ceiling(float value)
+         {
+             return MathF.Ceiling(value);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static float Floor(float value)
+         {
+             return MathF.Floor(value);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static float Round(float value, int mode)
+         {
+             return MathF.Round(value, (MidpointRounding)mode);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static float Truncate(float value)
+         {
+             return MathF.Truncate(value);
+diff --git a/src/ARMeilleure/Instructions/NativeInterface.cs b/src/ARMeilleure/Instructions/NativeInterface.cs
+index 3c2d9bb33..3e60299e0 100644
+--- a/src/ARMeilleure/Instructions/NativeInterface.cs
++++ b/src/ARMeilleure/Instructions/NativeInterface.cs
+@@ -2,8 +2,11 @@ using ARMeilleure.Memory;
+ using ARMeilleure.State;
+ using ARMeilleure.Translation;
+ using System;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
+-using ExecutionContext = ARMeilleure.State.ExecutionContext;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+@@ -36,7 +39,11 @@ namespace ARMeilleure.Instructions
+             Context = null;
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void Break(ulong address, int imm)
+         {
+             Statistics.PauseTimer();
+@@ -46,7 +53,11 @@ namespace ARMeilleure.Instructions
+             Statistics.ResumeTimer();
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void SupervisorCall(ulong address, int imm)
+         {
+             Statistics.PauseTimer();
+@@ -56,7 +67,11 @@ namespace ARMeilleure.Instructions
+             Statistics.ResumeTimer();
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void Undefined(ulong address, int opCode)
+         {
+             Statistics.PauseTimer();
+@@ -67,31 +82,51 @@ namespace ARMeilleure.Instructions
+         }
+ 
+         #region "System registers"
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static ulong GetCtrEl0()
+         {
+             return ExecutionContext.CtrEl0;
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static ulong GetDczidEl0()
+         {
+             return ExecutionContext.DczidEl0;
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static ulong GetCntfrqEl0()
+         {
+             return GetContext().CntfrqEl0;
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static ulong GetCntpctEl0()
+         {
+             return GetContext().CntpctEl0;
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static ulong GetCntvctEl0()
+         {
+             return GetContext().CntvctEl0;
+@@ -99,31 +134,51 @@ namespace ARMeilleure.Instructions
+         #endregion
+ 
+         #region "Read"
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static byte ReadByte(ulong address)
+         {
+             return GetMemoryManager().ReadGuest<byte>(address);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static ushort ReadUInt16(ulong address)
+         {
+             return GetMemoryManager().ReadGuest<ushort>(address);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static uint ReadUInt32(ulong address)
+         {
+             return GetMemoryManager().ReadGuest<uint>(address);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static ulong ReadUInt64(ulong address)
+         {
+             return GetMemoryManager().ReadGuest<ulong>(address);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static V128 ReadVector128(ulong address)
+         {
+             return GetMemoryManager().ReadGuest<V128>(address);
+@@ -131,56 +186,92 @@ namespace ARMeilleure.Instructions
+         #endregion
+ 
+         #region "Write"
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void WriteByte(ulong address, byte value)
+         {
+             GetMemoryManager().WriteGuest(address, value);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void WriteUInt16(ulong address, ushort value)
+         {
+             GetMemoryManager().WriteGuest(address, value);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void WriteUInt32(ulong address, uint value)
+         {
+             GetMemoryManager().WriteGuest(address, value);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void WriteUInt64(ulong address, ulong value)
+         {
+             GetMemoryManager().WriteGuest(address, value);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void WriteVector128(ulong address, V128 value)
+         {
+             GetMemoryManager().WriteGuest(address, value);
+         }
+         #endregion
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void EnqueueForRejit(ulong address)
+         {
+             Context.Translator.EnqueueForRejit(address, GetContext().ExecutionMode);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void SignalMemoryTracking(ulong address, ulong size, byte write)
+         {
+             GetMemoryManager().SignalMemoryTracking(address, size, write == 1);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void ThrowInvalidMemoryAccess(ulong address)
+         {
+             throw new InvalidAccessException(address);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static ulong GetFunctionAddress(ulong address)
+         {
+             TranslatedFunction function = Context.Translator.GetOrTranslate(address, GetContext().ExecutionMode);
+@@ -188,13 +279,21 @@ namespace ARMeilleure.Instructions
+             return (ulong)function.FuncPointer.ToInt64();
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static void InvalidateCacheLine(ulong address)
+         {
+             Context.Translator.InvalidateJitCacheRegion(address, InstEmit.DczSizeInBytes);
+         }
+ 
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
++#endif
+         public static byte CheckSynchronization()
+         {
+             Statistics.PauseTimer();
+diff --git a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Aes.cs b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Aes.cs
+index fe133929d..c0bf20aa3 100644
+--- a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Aes.cs
++++ b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Aes.cs
+@@ -1,30 +1,47 @@
+ using ARMeilleure.State;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static partial class SoftFallback
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Decrypt(V128 value, V128 roundKey)
++#endif
++public static V128 Decrypt(V128 value, V128 roundKey)
+         {
+             return CryptoHelper.AesInvSubBytes(CryptoHelper.AesInvShiftRows(value ^ roundKey));
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Encrypt(V128 value, V128 roundKey)
++#endif
++public static V128 Encrypt(V128 value, V128 roundKey)
+         {
+             return CryptoHelper.AesSubBytes(CryptoHelper.AesShiftRows(value ^ roundKey));
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 InverseMixColumns(V128 value)
++#endif
++public static V128 InverseMixColumns(V128 value)
+         {
+             return CryptoHelper.AesInvMixColumns(value);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 MixColumns(V128 value)
++#endif
++public static V128 MixColumns(V128 value)
+         {
+             return CryptoHelper.AesMixColumns(value);
+         }
+diff --git a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Count.cs b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Count.cs
+index cbe2a79ca..a532b3641 100644
+--- a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Count.cs
++++ b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Count.cs
+@@ -1,12 +1,20 @@
+ using System;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static partial class SoftFallback
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static ulong CountLeadingSigns(ulong value, int size) // size is 8, 16, 32 or 64 (SIMD&FP or Base Inst.).
++#endif
++public static ulong CountLeadingSigns(ulong value, int size) // size is 8, 16, 32 or 64 (SIMD&FP or Base Inst.).
+         {
+             value ^= value >> 1;
+ 
+@@ -24,9 +32,12 @@ namespace ARMeilleure.Instructions
+         }
+ 
+         private static ReadOnlySpan<byte> ClzNibbleTbl => [4, 3, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static ulong CountLeadingZeros(ulong value, int size) // size is 8, 16, 32 or 64 (SIMD&FP or Base Inst.).
++#endif
++public static ulong CountLeadingZeros(ulong value, int size) // size is 8, 16, 32 or 64 (SIMD&FP or Base Inst.).
+         {
+             if (value == 0ul)
+             {
+diff --git a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Crc32.cs b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Crc32.cs
+index 505cb032f..84eac0ddb 100644
+--- a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Crc32.cs
++++ b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Crc32.cs
+@@ -1,4 +1,8 @@
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+@@ -6,24 +10,54 @@ namespace ARMeilleure.Instructions
+     {
+         private const uint Crc32RevPoly = 0xedb88320;
+         private const uint Crc32cRevPoly = 0x82f63b78;
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static uint Crc32b(uint crc, byte value) => Crc32(crc, Crc32RevPoly, value);
++#endif
++public static uint Crc32b(uint crc, byte value) => Crc32(crc, Crc32RevPoly, value);
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static uint Crc32h(uint crc, ushort value) => Crc32h(crc, Crc32RevPoly, value);
++#endif
++public static uint Crc32h(uint crc, ushort value) => Crc32h(crc, Crc32RevPoly, value);
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static uint Crc32w(uint crc, uint value) => Crc32w(crc, Crc32RevPoly, value);
++#endif
++public static uint Crc32w(uint crc, uint value) => Crc32w(crc, Crc32RevPoly, value);
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static uint Crc32x(uint crc, ulong value) => Crc32x(crc, Crc32RevPoly, value);
+-
++#endif
++public static uint Crc32x(uint crc, ulong value) => Crc32x(crc, Crc32RevPoly, value);
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static uint Crc32cb(uint crc, byte value) => Crc32(crc, Crc32cRevPoly, value);
++#endif
++public static uint Crc32cb(uint crc, byte value) => Crc32(crc, Crc32cRevPoly, value);
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static uint Crc32ch(uint crc, ushort value) => Crc32h(crc, Crc32cRevPoly, value);
++#endif
++public static uint Crc32ch(uint crc, ushort value) => Crc32h(crc, Crc32cRevPoly, value);
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static uint Crc32cw(uint crc, uint value) => Crc32w(crc, Crc32cRevPoly, value);
++#endif
++public static uint Crc32cw(uint crc, uint value) => Crc32w(crc, Crc32cRevPoly, value);
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static uint Crc32cx(uint crc, ulong value) => Crc32x(crc, Crc32cRevPoly, value);
++#endif
++public static uint Crc32cx(uint crc, ulong value) => Crc32x(crc, Crc32cRevPoly, value);
+ 
+         private static uint Crc32h(uint crc, uint poly, ushort val)
+         {
+diff --git a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Saturation.cs b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Saturation.cs
+index 2cbea1560..0b7cc24f6 100644
+--- a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Saturation.cs
++++ b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Saturation.cs
+@@ -1,11 +1,19 @@
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static partial class SoftFallback
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static int SatF32ToS32(float value)
++#endif
++public static int SatF32ToS32(float value)
+         {
+             if (float.IsNaN(value))
+             {
+@@ -15,9 +23,12 @@ namespace ARMeilleure.Instructions
+             return value >= int.MaxValue ? int.MaxValue :
+                 value <= int.MinValue ? int.MinValue : (int)value;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static long SatF32ToS64(float value)
++#endif
++public static long SatF32ToS64(float value)
+         {
+             if (float.IsNaN(value))
+             {
+@@ -27,9 +38,12 @@ namespace ARMeilleure.Instructions
+             return value >= long.MaxValue ? long.MaxValue :
+                 value <= long.MinValue ? long.MinValue : (long)value;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static uint SatF32ToU32(float value)
++#endif
++public static uint SatF32ToU32(float value)
+         {
+             if (float.IsNaN(value))
+             {
+@@ -39,9 +53,12 @@ namespace ARMeilleure.Instructions
+             return value >= uint.MaxValue ? uint.MaxValue :
+                 value <= uint.MinValue ? uint.MinValue : (uint)value;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static ulong SatF32ToU64(float value)
++#endif
++public static ulong SatF32ToU64(float value)
+         {
+             if (float.IsNaN(value))
+             {
+@@ -51,9 +68,12 @@ namespace ARMeilleure.Instructions
+             return value >= ulong.MaxValue ? ulong.MaxValue :
+                 value <= ulong.MinValue ? ulong.MinValue : (ulong)value;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static int SatF64ToS32(double value)
++#endif
++public static int SatF64ToS32(double value)
+         {
+             if (double.IsNaN(value))
+             {
+@@ -63,9 +83,12 @@ namespace ARMeilleure.Instructions
+             return value >= int.MaxValue ? int.MaxValue :
+                 value <= int.MinValue ? int.MinValue : (int)value;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static long SatF64ToS64(double value)
++#endif
++public static long SatF64ToS64(double value)
+         {
+             if (double.IsNaN(value))
+             {
+@@ -75,9 +98,12 @@ namespace ARMeilleure.Instructions
+             return value >= long.MaxValue ? long.MaxValue :
+                 value <= long.MinValue ? long.MinValue : (long)value;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static uint SatF64ToU32(double value)
++#endif
++public static uint SatF64ToU32(double value)
+         {
+             if (double.IsNaN(value))
+             {
+@@ -87,9 +113,12 @@ namespace ARMeilleure.Instructions
+             return value >= uint.MaxValue ? uint.MaxValue :
+                 value <= uint.MinValue ? uint.MinValue : (uint)value;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static ulong SatF64ToU64(double value)
++#endif
++public static ulong SatF64ToU64(double value)
+         {
+             if (double.IsNaN(value))
+             {
+diff --git a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Sha1.cs b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Sha1.cs
+index 62aecced7..f51e82d4e 100644
+--- a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Sha1.cs
++++ b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Sha1.cs
+@@ -1,12 +1,20 @@
+ using ARMeilleure.State;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static partial class SoftFallback
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 HashChoose(V128 hash_abcd, uint hash_e, V128 wk)
++#endif
++public static V128 HashChoose(V128 hash_abcd, uint hash_e, V128 wk)
+         {
+             for (int e = 0; e <= 3; e++)
+             {
+@@ -25,15 +33,21 @@ namespace ARMeilleure.Instructions
+ 
+             return hash_abcd;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static uint FixedRotate(uint hash_e)
++#endif
++public static uint FixedRotate(uint hash_e)
+         {
+             return hash_e.Rol(30);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 HashMajority(V128 hash_abcd, uint hash_e, V128 wk)
++#endif
++public static V128 HashMajority(V128 hash_abcd, uint hash_e, V128 wk)
+         {
+             for (int e = 0; e <= 3; e++)
+             {
+@@ -52,9 +66,12 @@ namespace ARMeilleure.Instructions
+ 
+             return hash_abcd;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 HashParity(V128 hash_abcd, uint hash_e, V128 wk)
++#endif
++public static V128 HashParity(V128 hash_abcd, uint hash_e, V128 wk)
+         {
+             for (int e = 0; e <= 3; e++)
+             {
+@@ -73,9 +90,12 @@ namespace ARMeilleure.Instructions
+ 
+             return hash_abcd;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Sha1SchedulePart1(V128 w0_3, V128 w4_7, V128 w8_11)
++#endif
++public static V128 Sha1SchedulePart1(V128 w0_3, V128 w4_7, V128 w8_11)
+         {
+             ulong t2 = w4_7.Extract<ulong>(0);
+             ulong t1 = w0_3.Extract<ulong>(1);
+@@ -84,9 +104,12 @@ namespace ARMeilleure.Instructions
+ 
+             return result ^ (w0_3 ^ w8_11);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Sha1SchedulePart2(V128 tw0_3, V128 w12_15)
++#endif
++public static V128 Sha1SchedulePart2(V128 tw0_3, V128 w12_15)
+         {
+             V128 t = tw0_3 ^ (w12_15 >> 32);
+ 
+diff --git a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Sha256.cs b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Sha256.cs
+index 9ce5ec5f9..fbde1179c 100644
+--- a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Sha256.cs
++++ b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Sha256.cs
+@@ -1,24 +1,38 @@
+ using ARMeilleure.State;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static partial class SoftFallback
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 HashLower(V128 hash_abcd, V128 hash_efgh, V128 wk)
++#endif
++public static V128 HashLower(V128 hash_abcd, V128 hash_efgh, V128 wk)
+         {
+             return Sha256Hash(hash_abcd, hash_efgh, wk, part1: true);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 HashUpper(V128 hash_abcd, V128 hash_efgh, V128 wk)
++#endif
++public static V128 HashUpper(V128 hash_abcd, V128 hash_efgh, V128 wk)
+         {
+             return Sha256Hash(hash_abcd, hash_efgh, wk, part1: false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Sha256SchedulePart1(V128 w0_3, V128 w4_7)
++#endif
++public static V128 Sha256SchedulePart1(V128 w0_3, V128 w4_7)
+         {
+             V128 result = new();
+ 
+@@ -35,9 +49,12 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Sha256SchedulePart2(V128 w0_3, V128 w8_11, V128 w12_15)
++#endif
++public static V128 Sha256SchedulePart2(V128 w0_3, V128 w8_11, V128 w12_15)
+         {
+             V128 result = new();
+ 
+diff --git a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.ShrImm64.cs b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.ShrImm64.cs
+index 063b2c939..7ce20fc0c 100644
+--- a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.ShrImm64.cs
++++ b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.ShrImm64.cs
+@@ -1,11 +1,19 @@
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static partial class SoftFallback
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static long SignedShrImm64(long value, long roundConst, int shift)
++#endif
++public static long SignedShrImm64(long value, long roundConst, int shift)
+         {
+             if (roundConst == 0L)
+             {
+@@ -46,9 +54,12 @@ namespace ARMeilleure.Instructions
+                 }
+             }
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static ulong UnsignedShrImm64(ulong value, long roundConst, int shift)
++#endif
++public static ulong UnsignedShrImm64(ulong value, long roundConst, int shift)
+         {
+             if (roundConst == 0L)
+             {
+diff --git a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Table.cs b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Table.cs
+index 61fa178df..b8a515267 100644
+--- a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Table.cs
++++ b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.Table.cs
+@@ -1,55 +1,84 @@
+ using ARMeilleure.State;
+ using System;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static partial class SoftFallback
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Tbl1(V128 vector, int bytes, V128 tb0)
++#endif
++public static V128 Tbl1(V128 vector, int bytes, V128 tb0)
+         {
+             return TblOrTbx(default, vector, bytes, tb0);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Tbl2(V128 vector, int bytes, V128 tb0, V128 tb1)
++#endif
++public static V128 Tbl2(V128 vector, int bytes, V128 tb0, V128 tb1)
+         {
+             return TblOrTbx(default, vector, bytes, tb0, tb1);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Tbl3(V128 vector, int bytes, V128 tb0, V128 tb1, V128 tb2)
++#endif
++public static V128 Tbl3(V128 vector, int bytes, V128 tb0, V128 tb1, V128 tb2)
+         {
+             return TblOrTbx(default, vector, bytes, tb0, tb1, tb2);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Tbl4(V128 vector, int bytes, V128 tb0, V128 tb1, V128 tb2, V128 tb3)
++#endif
++public static V128 Tbl4(V128 vector, int bytes, V128 tb0, V128 tb1, V128 tb2, V128 tb3)
+         {
+             return TblOrTbx(default, vector, bytes, tb0, tb1, tb2, tb3);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Tbx1(V128 dest, V128 vector, int bytes, V128 tb0)
++#endif
++public static V128 Tbx1(V128 dest, V128 vector, int bytes, V128 tb0)
+         {
+             return TblOrTbx(dest, vector, bytes, tb0);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Tbx2(V128 dest, V128 vector, int bytes, V128 tb0, V128 tb1)
++#endif
++public static V128 Tbx2(V128 dest, V128 vector, int bytes, V128 tb0, V128 tb1)
+         {
+             return TblOrTbx(dest, vector, bytes, tb0, tb1);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Tbx3(V128 dest, V128 vector, int bytes, V128 tb0, V128 tb1, V128 tb2)
++#endif
++public static V128 Tbx3(V128 dest, V128 vector, int bytes, V128 tb0, V128 tb1, V128 tb2)
+         {
+             return TblOrTbx(dest, vector, bytes, tb0, tb1, tb2);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 Tbx4(V128 dest, V128 vector, int bytes, V128 tb0, V128 tb1, V128 tb2, V128 tb3)
++#endif
++public static V128 Tbx4(V128 dest, V128 vector, int bytes, V128 tb0, V128 tb1, V128 tb2, V128 tb3)
+         {
+             return TblOrTbx(dest, vector, bytes, tb0, tb1, tb2, tb3);
+         }
+diff --git a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.cs b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.cs
+index a5baae782..9005039c6 100644
+--- a/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.cs
++++ b/src/ARMeilleure/Instructions/SoftFallback/SoftFallback.cs
+@@ -1,12 +1,20 @@
+ using ARMeilleure.State;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static partial class SoftFallback
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static V128 PolynomialMult64_128(ulong op1, ulong op2)
++#endif
++public static V128 PolynomialMult64_128(ulong op1, ulong op2)
+         {
+             V128 result = V128.Zero;
+ 
+diff --git a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat16_32.cs b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat16_32.cs
+index f2d0f1eb4..6fedce190 100644
+--- a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat16_32.cs
++++ b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat16_32.cs
+@@ -1,13 +1,21 @@
+ using ARMeilleure.State;
+ using System;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static class SoftFloat16_32
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPConvert(ushort valueBits)
++#endif
++public static float FPConvert(ushort valueBits)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+ 
+diff --git a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat16_64.cs b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat16_64.cs
+index 5167c1908..dd24faefc 100644
+--- a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat16_64.cs
++++ b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat16_64.cs
+@@ -1,13 +1,21 @@
+ using ARMeilleure.State;
+ using System;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static class SoftFloat16_64
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPConvert(ushort valueBits)
++#endif
++public static double FPConvert(ushort valueBits)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+ 
+diff --git a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat32.cs b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat32.cs
+index a7ab054be..616f89717 100644
+--- a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat32.cs
++++ b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat32.cs
+@@ -1,19 +1,30 @@
+ using ARMeilleure.State;
+ using System;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+ static class SoftFloat32
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPAdd(float value1, float value2)
++#endif
++public static float FPAdd(float value1, float value2)
+         {
+             return FPAddFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPAddFpscr(float value1, float value2, byte standardFpscr)
++#endif
++public static float FPAddFpscr(float value1, float value2, byte standardFpscr)
+         {
+             return FPAddFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -68,9 +79,12 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static int FPCompare(float value1, float value2, byte signalNaNs)
++#endif
++public static int FPCompare(float value1, float value2, byte signalNaNs)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -107,9 +121,12 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPCompareEQ(float value1, float value2)
++#endif
++public static float FPCompareEQ(float value1, float value2)
+         {
+             return FPCompareEQFpscrImpl(value1, value2, false);
+         }
+@@ -140,21 +157,30 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPCompareEQFpscr(float value1, float value2, byte standardFpscr)
++#endif
++public static float FPCompareEQFpscr(float value1, float value2, byte standardFpscr)
+         {
+             return FPCompareEQFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPCompareGE(float value1, float value2)
++#endif
++public static float FPCompareGE(float value1, float value2)
+         {
+             return FPCompareGEFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPCompareGEFpscr(float value1, float value2, byte standardFpscr)
++#endif
++public static float FPCompareGEFpscr(float value1, float value2, byte standardFpscr)
+         {
+             return FPCompareGEFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -182,15 +208,21 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPCompareGT(float value1, float value2)
++#endif
++public static float FPCompareGT(float value1, float value2)
+         {
+             return FPCompareGTFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPCompareGTFpscr(float value1, float value2, byte standardFpscr)
++#endif
++public static float FPCompareGTFpscr(float value1, float value2, byte standardFpscr)
+         {
+             return FPCompareGTFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -218,33 +250,48 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPCompareLE(float value1, float value2)
++#endif
++public static float FPCompareLE(float value1, float value2)
+         {
+             return FPCompareGEFpscrImpl(value2, value1, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPCompareLT(float value1, float value2)
++#endif
++public static float FPCompareLT(float value1, float value2)
+         {
+             return FPCompareGTFpscrImpl(value2, value1, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPCompareLEFpscr(float value1, float value2, byte standardFpscr)
++#endif
++public static float FPCompareLEFpscr(float value1, float value2, byte standardFpscr)
+         {
+             return FPCompareGEFpscrImpl(value2, value1, standardFpscr == 1);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPCompareLTFpscr(float value1, float value2, byte standardFpscr)
++#endif
++public static float FPCompareLTFpscr(float value1, float value2, byte standardFpscr)
+         {
+             return FPCompareGEFpscrImpl(value2, value1, standardFpscr == 1);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPDiv(float value1, float value2)
++#endif
++public static float FPDiv(float value1, float value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -295,15 +342,21 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMax(float value1, float value2)
++#endif
++public static float FPMax(float value1, float value2)
+         {
+             return FPMaxFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMaxFpscr(float value1, float value2, byte standardFpscr)
++#endif
++public static float FPMaxFpscr(float value1, float value2, byte standardFpscr)
+         {
+             return FPMaxFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -368,9 +421,12 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMaxNum(float value1, float value2)
++#endif
++public static float FPMaxNum(float value1, float value2)
+         {
+             return FPMaxNumFpscrImpl(value1, value2, false);
+         }
+@@ -394,21 +450,30 @@ static class SoftFloat32
+ 
+             return FPMaxFpscrImpl(value1, value2, standardFpscr);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMaxNumFpscr(float value1, float value2, byte standardFpscr)
++#endif
++public static float FPMaxNumFpscr(float value1, float value2, byte standardFpscr)
+         {
+             return FPMaxNumFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMin(float value1, float value2)
++#endif
++public static float FPMin(float value1, float value2)
+         {
+             return FPMinFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMinFpscr(float value1, float value2, byte standardFpscr)
++#endif
++public static float FPMinFpscr(float value1, float value2, byte standardFpscr)
+         {
+             return FPMinFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -473,15 +538,21 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMinNum(float value1, float value2)
++#endif
++public static float FPMinNum(float value1, float value2)
+         {
+             return FPMinNumFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMinNumFpscr(float value1, float value2, byte standardFpscr)
++#endif
++public static float FPMinNumFpscr(float value1, float value2, byte standardFpscr)
+         {
+             return FPMinNumFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -505,15 +576,21 @@ static class SoftFloat32
+ 
+             return FPMinFpscrImpl(value1, value2, standardFpscr);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMul(float value1, float value2)
++#endif
++public static float FPMul(float value1, float value2)
+         {
+             return FPMulFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMulFpscr(float value1, float value2, byte standardFpscr)
++#endif
++public static float FPMulFpscr(float value1, float value2, byte standardFpscr)
+         {
+             return FPMulFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -564,15 +641,21 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMulAdd(float valueA, float value1, float value2)
++#endif
++public static float FPMulAdd(float valueA, float value1, float value2)
+         {
+             return FPMulAddFpscrImpl(valueA, value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMulAddFpscr(float valueA, float value1, float value2, byte standardFpscr)
++#endif
++public static float FPMulAddFpscr(float valueA, float value1, float value2, byte standardFpscr)
+         {
+             return FPMulAddFpscrImpl(valueA, value1, value2, standardFpscr == 1);
+         }
+@@ -642,25 +725,34 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMulSub(float valueA, float value1, float value2)
++#endif
++public static float FPMulSub(float valueA, float value1, float value2)
+         {
+             value1 = value1.FPNeg();
+ 
+             return FPMulAddFpscrImpl(valueA, value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMulSubFpscr(float valueA, float value1, float value2, byte standardFpscr)
++#endif
++public static float FPMulSubFpscr(float valueA, float value1, float value2, byte standardFpscr)
+         {
+             value1 = value1.FPNeg();
+ 
+             return FPMulAddFpscrImpl(valueA, value1, value2, standardFpscr == 1);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPMulX(float value1, float value2)
++#endif
++public static float FPMulX(float value1, float value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -704,32 +796,44 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPNegMulAdd(float valueA, float value1, float value2)
++#endif
++public static float FPNegMulAdd(float valueA, float value1, float value2)
+         {
+             valueA = valueA.FPNeg();
+             value1 = value1.FPNeg();
+ 
+             return FPMulAddFpscrImpl(valueA, value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPNegMulSub(float valueA, float value1, float value2)
++#endif
++public static float FPNegMulSub(float valueA, float value1, float value2)
+         {
+             valueA = valueA.FPNeg();
+ 
+             return FPMulAddFpscrImpl(valueA, value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPRecipEstimate(float value)
++#endif
++public static float FPRecipEstimate(float value)
+         {
+             return FPRecipEstimateFpscrImpl(value, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPRecipEstimateFpscr(float value, byte standardFpscr)
++#endif
++public static float FPRecipEstimateFpscr(float value, byte standardFpscr)
+         {
+             return FPRecipEstimateFpscrImpl(value, standardFpscr == 1);
+         }
+@@ -820,9 +924,12 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPRecipStep(float value1, float value2)
++#endif
++public static float FPRecipStep(float value1, float value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.StandardFpcrValue;
+@@ -855,9 +962,12 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPRecipStepFused(float value1, float value2)
++#endif
++public static float FPRecipStepFused(float value1, float value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -899,9 +1009,12 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPRecpX(float value)
++#endif
++public static float FPRecpX(float value)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -925,15 +1038,21 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPRSqrtEstimate(float value)
++#endif
++public static float FPRSqrtEstimate(float value)
+         {
+             return FPRSqrtEstimateFpscrImpl(value, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPRSqrtEstimateFpscr(float value, byte standardFpscr)
++#endif
++public static float FPRSqrtEstimateFpscr(float value, byte standardFpscr)
+         {
+             return FPRSqrtEstimateFpscrImpl(value, standardFpscr == 1);
+         }
+@@ -1051,9 +1170,12 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPRSqrtStep(float value1, float value2)
++#endif
++public static float FPRSqrtStep(float value1, float value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.StandardFpcrValue;
+@@ -1086,9 +1208,12 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPRSqrtStepFused(float value1, float value2)
++#endif
++public static float FPRSqrtStepFused(float value1, float value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -1130,9 +1255,12 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPSqrt(float value)
++#endif
++public static float FPSqrt(float value)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -1173,9 +1301,12 @@ static class SoftFloat32
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static float FPSub(float value1, float value2)
++#endif
++public static float FPSub(float value1, float value2)
+         {
+             return FPSubFpscrImpl(value1, value2, false);
+         }
+diff --git a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat32_16.cs b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat32_16.cs
+index 67bc5149d..c09c8bb80 100644
+--- a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat32_16.cs
++++ b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat32_16.cs
+@@ -1,13 +1,21 @@
+ using ARMeilleure.State;
+ using System;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static class SoftFloat32_16
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static ushort FPConvert(float value)
++#endif
++public static ushort FPConvert(float value)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+ 
+diff --git a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat64.cs b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat64.cs
+index cad132e3a..c7361ed8d 100644
+--- a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat64.cs
++++ b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat64.cs
+@@ -1,19 +1,30 @@
+ using ARMeilleure.State;
+ using System;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static class SoftFloat64
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPAdd(double value1, double value2)
++#endif
++public static double FPAdd(double value1, double value2)
+         {
+             return FPAddFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPAddFpscr(double value1, double value2, byte standardFpscr)
++#endif
++public static double FPAddFpscr(double value1, double value2, byte standardFpscr)
+         {
+             return FPAddFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -68,9 +79,12 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static int FPCompare(double value1, double value2, byte signalNaNs)
++#endif
++public static int FPCompare(double value1, double value2, byte signalNaNs)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -107,15 +121,21 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPCompareEQ(double value1, double value2)
++#endif
++public static double FPCompareEQ(double value1, double value2)
+         {
+             return FPCompareEQFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPCompareEQFpscr(double value1, double value2, byte standardFpscr)
++#endif
++public static double FPCompareEQFpscr(double value1, double value2, byte standardFpscr)
+         {
+             return FPCompareEQFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -146,15 +166,21 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPCompareGE(double value1, double value2)
++#endif
++public static double FPCompareGE(double value1, double value2)
+         {
+             return FPCompareGEFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPCompareGEFpscr(double value1, double value2, byte standardFpscr)
++#endif
++public static double FPCompareGEFpscr(double value1, double value2, byte standardFpscr)
+         {
+             return FPCompareGEFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -182,15 +208,21 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPCompareGT(double value1, double value2)
++#endif
++public static double FPCompareGT(double value1, double value2)
+         {
+             return FPCompareGTFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPCompareGTFpscr(double value1, double value2, byte standardFpscr)
++#endif
++public static double FPCompareGTFpscr(double value1, double value2, byte standardFpscr)
+         {
+             return FPCompareGTFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -218,33 +250,48 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPCompareLE(double value1, double value2)
++#endif
++public static double FPCompareLE(double value1, double value2)
+         {
+             return FPCompareGEFpscrImpl(value2, value1, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPCompareLT(double value1, double value2)
++#endif
++public static double FPCompareLT(double value1, double value2)
+         {
+             return FPCompareGTFpscrImpl(value2, value1, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPCompareLEFpscr(double value1, double value2, byte standardFpscr)
++#endif
++public static double FPCompareLEFpscr(double value1, double value2, byte standardFpscr)
+         {
+             return FPCompareGEFpscrImpl(value2, value1, standardFpscr == 1);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPCompareLTFpscr(double value1, double value2, byte standardFpscr)
++#endif
++public static double FPCompareLTFpscr(double value1, double value2, byte standardFpscr)
+         {
+             return FPCompareGTFpscrImpl(value2, value1, standardFpscr == 1);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPDiv(double value1, double value2)
++#endif
++public static double FPDiv(double value1, double value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -295,15 +342,21 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMax(double value1, double value2)
++#endif
++public static double FPMax(double value1, double value2)
+         {
+             return FPMaxFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMaxFpscr(double value1, double value2, byte standardFpscr)
++#endif
++public static double FPMaxFpscr(double value1, double value2, byte standardFpscr)
+         {
+             return FPMaxFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -368,15 +421,21 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMaxNum(double value1, double value2)
++#endif
++public static double FPMaxNum(double value1, double value2)
+         {
+             return FPMaxNumFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMaxNumFpscr(double value1, double value2, byte standardFpscr)
++#endif
++public static double FPMaxNumFpscr(double value1, double value2, byte standardFpscr)
+         {
+             return FPMaxNumFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -400,15 +459,21 @@ namespace ARMeilleure.Instructions
+ 
+             return FPMaxFpscrImpl(value1, value2, standardFpscr);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMin(double value1, double value2)
++#endif
++public static double FPMin(double value1, double value2)
+         {
+             return FPMinFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMinFpscr(double value1, double value2, byte standardFpscr)
++#endif
++public static double FPMinFpscr(double value1, double value2, byte standardFpscr)
+         {
+             return FPMinFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -473,15 +538,21 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMinNum(double value1, double value2)
++#endif
++public static double FPMinNum(double value1, double value2)
+         {
+             return FPMinNumFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMinNumFpscr(double value1, double value2, byte standardFpscr)
++#endif
++public static double FPMinNumFpscr(double value1, double value2, byte standardFpscr)
+         {
+             return FPMinNumFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -505,15 +576,21 @@ namespace ARMeilleure.Instructions
+ 
+             return FPMinFpscrImpl(value1, value2, standardFpscr);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMul(double value1, double value2)
++#endif
++public static double FPMul(double value1, double value2)
+         {
+             return FPMulFpscrImpl(value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMulFpscr(double value1, double value2, byte standardFpscr)
++#endif
++public static double FPMulFpscr(double value1, double value2, byte standardFpscr)
+         {
+             return FPMulFpscrImpl(value1, value2, standardFpscr == 1);
+         }
+@@ -564,15 +641,21 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMulAdd(double valueA, double value1, double value2)
++#endif
++public static double FPMulAdd(double valueA, double value1, double value2)
+         {
+             return FPMulAddFpscrImpl(valueA, value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMulAddFpscr(double valueA, double value1, double value2, byte standardFpscr)
++#endif
++public static double FPMulAddFpscr(double valueA, double value1, double value2, byte standardFpscr)
+         {
+             return FPMulAddFpscrImpl(valueA, value1, value2, standardFpscr == 1);
+         }
+@@ -642,25 +725,34 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMulSub(double valueA, double value1, double value2)
++#endif
++public static double FPMulSub(double valueA, double value1, double value2)
+         {
+             value1 = value1.FPNeg();
+ 
+             return FPMulAddFpscrImpl(valueA, value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMulSubFpscr(double valueA, double value1, double value2, byte standardFpscr)
++#endif
++public static double FPMulSubFpscr(double valueA, double value1, double value2, byte standardFpscr)
+         {
+             value1 = value1.FPNeg();
+ 
+             return FPMulAddFpscrImpl(valueA, value1, value2, standardFpscr == 1);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPMulX(double value1, double value2)
++#endif
++public static double FPMulX(double value1, double value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -704,32 +796,44 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPNegMulAdd(double valueA, double value1, double value2)
++#endif
++public static double FPNegMulAdd(double valueA, double value1, double value2)
+         {
+             valueA = valueA.FPNeg();
+             value1 = value1.FPNeg();
+ 
+             return FPMulAddFpscrImpl(valueA, value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPNegMulSub(double valueA, double value1, double value2)
++#endif
++public static double FPNegMulSub(double valueA, double value1, double value2)
+         {
+             valueA = valueA.FPNeg();
+ 
+             return FPMulAddFpscrImpl(valueA, value1, value2, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPRecipEstimate(double value)
++#endif
++public static double FPRecipEstimate(double value)
+         {
+             return FPRecipEstimateFpscrImpl(value, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPRecipEstimateFpscr(double value, byte standardFpscr)
++#endif
++public static double FPRecipEstimateFpscr(double value, byte standardFpscr)
+         {
+             return FPRecipEstimateFpscrImpl(value, standardFpscr == 1);
+         }
+@@ -820,9 +924,12 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPRecipStep(double value1, double value2)
++#endif
++public static double FPRecipStep(double value1, double value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.StandardFpcrValue;
+@@ -855,9 +962,12 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPRecipStepFused(double value1, double value2)
++#endif
++public static double FPRecipStepFused(double value1, double value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -899,9 +1009,12 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPRecpX(double value)
++#endif
++public static double FPRecpX(double value)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -925,15 +1038,21 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPRSqrtEstimate(double value)
++#endif
++public static double FPRSqrtEstimate(double value)
+         {
+             return FPRSqrtEstimateFpscrImpl(value, false);
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPRSqrtEstimateFpscr(double value, byte standardFpscr)
++#endif
++public static double FPRSqrtEstimateFpscr(double value, byte standardFpscr)
+         {
+             return FPRSqrtEstimateFpscrImpl(value, standardFpscr == 1);
+         }
+@@ -1051,9 +1170,12 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPRSqrtStep(double value1, double value2)
++#endif
++public static double FPRSqrtStep(double value1, double value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.StandardFpcrValue;
+@@ -1086,9 +1208,12 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPRSqrtStepFused(double value1, double value2)
++#endif
++public static double FPRSqrtStepFused(double value1, double value2)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -1130,9 +1255,12 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPSqrt(double value)
++#endif
++public static double FPSqrt(double value)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+             FPCR fpcr = context.Fpcr;
+@@ -1173,9 +1301,12 @@ namespace ARMeilleure.Instructions
+ 
+             return result;
+         }
+-
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static double FPSub(double value1, double value2)
++#endif
++public static double FPSub(double value1, double value2)
+         {
+             return FPSubFpscr(value1, value2, false);
+         }
+diff --git a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat64_16.cs b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat64_16.cs
+index 71bc84da5..09eab24dd 100644
+--- a/src/ARMeilleure/Instructions/SoftFloat/SoftFloat64_16.cs
++++ b/src/ARMeilleure/Instructions/SoftFloat/SoftFloat64_16.cs
+@@ -1,13 +1,21 @@
+ using ARMeilleure.State;
+ using System;
++#if ANDROID
++using System.Runtime.CompilerServices;
++#else
+ using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Instructions
+ {
+     static class SoftFloat64_16
+     {
++#if ANDROID
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++#else
+         [UnmanagedCallersOnly]
+-        public static ushort FPConvert(double value)
++#endif
++public static ushort FPConvert(double value)
+         {
+             ExecutionContext context = NativeInterface.GetContext();
+ 
+diff --git a/src/ARMeilleure/Translation/Delegates.cs b/src/ARMeilleure/Translation/Delegates.cs
+index f44e8dc54..0616f3812 100644
+--- a/src/ARMeilleure/Translation/Delegates.cs
++++ b/src/ARMeilleure/Translation/Delegates.cs
+@@ -2,11 +2,358 @@ using ARMeilleure.Instructions;
+ using System;
+ using System.Collections.Generic;
+ using System.Reflection;
++#if ANDROID
++using ARMeilleure.State;
++using System.Runtime.InteropServices;
++#endif
+ 
+ namespace ARMeilleure.Translation
+ {
+     static class Delegates
+     {
++#if ANDROID
++        // MathHelper delegates
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double MathHelperAbsDelegate(double value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double MathHelperCeilingDelegate(double value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double MathHelperFloorDelegate(double value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double MathHelperRoundDelegate(double value, int mode);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double MathHelperTruncateDelegate(double value);
++
++        // MathHelperF delegates
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float MathHelperFAbsDelegate(float value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float MathHelperFCeilingDelegate(float value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float MathHelperFFloorDelegate(float value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float MathHelperFRoundDelegate(float value, int mode);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float MathHelperFTruncateDelegate(float value);
++
++        // NativeInterface delegates
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceBreakDelegate(ulong address, int imm);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate byte NativeInterfaceCheckSynchronizationDelegate();
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceEnqueueForRejitDelegate(ulong address);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong NativeInterfaceGetCntfrqEl0Delegate();
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong NativeInterfaceGetCntpctEl0Delegate();
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong NativeInterfaceGetCntvctEl0Delegate();
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong NativeInterfaceGetCtrEl0Delegate();
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong NativeInterfaceGetDczidEl0Delegate();
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong NativeInterfaceGetFunctionAddressDelegate(ulong address);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceInvalidateCacheLineDelegate(ulong address);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate byte NativeInterfaceReadByteDelegate(ulong address);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ushort NativeInterfaceReadUInt16Delegate(ulong address);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint NativeInterfaceReadUInt32Delegate(ulong address);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong NativeInterfaceReadUInt64Delegate(ulong address);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 NativeInterfaceReadVector128Delegate(ulong address);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceSignalMemoryTrackingDelegate(ulong address, ulong size, byte write);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceSupervisorCallDelegate(ulong address, int imm);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceThrowInvalidMemoryAccessDelegate(ulong address);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceUndefinedDelegate(ulong address, int opCode);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceWriteByteDelegate(ulong address, byte value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceWriteUInt16Delegate(ulong address, ushort value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceWriteUInt32Delegate(ulong address, uint value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceWriteUInt64Delegate(ulong address, ulong value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate void NativeInterfaceWriteVector128Delegate(ulong address, V128 value);
++
++        // SoftFallback delegates
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong SoftFallbackCountLeadingSignsDelegate(ulong value, int size);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong SoftFallbackCountLeadingZerosDelegate(ulong value, int size);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint SoftFallbackCrc32bDelegate(uint crc, byte val);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint SoftFallbackCrc32cbDelegate(uint crc, byte val);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint SoftFallbackCrc32chDelegate(uint crc, ushort val);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint SoftFallbackCrc32cwDelegate(uint crc, uint val);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint SoftFallbackCrc32cxDelegate(uint crc, ulong val);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint SoftFallbackCrc32hDelegate(uint crc, ushort val);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint SoftFallbackCrc32wDelegate(uint crc, uint val);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint SoftFallbackCrc32xDelegate(uint crc, ulong val);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackDecryptDelegate(V128 value, V128 roundKey);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackEncryptDelegate(V128 value, V128 roundKey);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint SoftFallbackFixedRotateDelegate(uint hash_e);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackHashChooseDelegate(V128 hash_abcd, uint hash_e, V128 wk);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackHashLowerDelegate(V128 hash_abcd, V128 hash_efgh, V128 wk);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackHashMajorityDelegate(V128 hash_abcd, uint hash_e, V128 wk);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackHashParityDelegate(V128 hash_abcd, uint hash_e, V128 wk);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackHashUpperDelegate(V128 hash_abcd, V128 hash_efgh, V128 wk);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackInverseMixColumnsDelegate(V128 value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackMixColumnsDelegate(V128 value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackPolynomialMult64_128Delegate(ulong op1, ulong op2);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate int SoftFallbackSatF32ToS32Delegate(float value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate long SoftFallbackSatF32ToS64Delegate(float value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint SoftFallbackSatF32ToU32Delegate(float value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong SoftFallbackSatF32ToU64Delegate(float value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate int SoftFallbackSatF64ToS32Delegate(double value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate long SoftFallbackSatF64ToS64Delegate(double value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate uint SoftFallbackSatF64ToU32Delegate(double value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong SoftFallbackSatF64ToU64Delegate(double value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackSha1SchedulePart1Delegate(V128 w0_3, V128 w4_7, V128 w8_11);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackSha1SchedulePart2Delegate(V128 tw0_3, V128 w12_15);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackSha256SchedulePart1Delegate(V128 w0_3, V128 w4_7);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackSha256SchedulePart2Delegate(V128 w0_3, V128 w8_11, V128 w12_15);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate long SoftFallbackSignedShrImm64Delegate(long value, long roundConst, int shift);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackTbl1Delegate(V128 vector, int bytes, V128 table);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackTbl2Delegate(V128 vector, int bytes, V128 table0, V128 table1);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackTbl3Delegate(V128 vector, int bytes, V128 table0, V128 table1, V128 table2);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackTbl4Delegate(V128 vector, int bytes, V128 table0, V128 table1, V128 table2, V128 table3);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackTbx1Delegate(V128 dest, V128 vector, int bytes, V128 table);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackTbx2Delegate(V128 dest, V128 vector, int bytes, V128 table0, V128 table1);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackTbx3Delegate(V128 dest, V128 vector, int bytes, V128 table0, V128 table1, V128 table2);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate V128 SoftFallbackTbx4Delegate(V128 dest, V128 vector, int bytes, V128 table0, V128 table1, V128 table2, V128 table3);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ulong SoftFallbackUnsignedShrImm64Delegate(ulong value, long roundConst, int shift);
++
++        // SoftFloat delegates
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat16_32FPConvertDelegate(ushort value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat16_64FPConvertDelegate(ushort value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPAddDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPAddFpscrDelegate(float a, float b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate int SoftFloat32FPCompareDelegate(float a, float b, byte signalNaNs);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPCompareEQDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPCompareEQFpscrDelegate(float a, float b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPCompareGEDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPCompareGEFpscrDelegate(float a, float b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPCompareGTDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPCompareGTFpscrDelegate(float a, float b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPCompareLEDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPCompareLEFpscrDelegate(float a, float b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPCompareLTDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPCompareLTFpscrDelegate(float a, float b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPDivDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMaxDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMaxFpscrDelegate(float a, float b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMaxNumDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMaxNumFpscrDelegate(float a, float b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMinDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMinFpscrDelegate(float a, float b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMinNumDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMinNumFpscrDelegate(float a, float b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMulDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMulFpscrDelegate(float a, float b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMulAddDelegate(float a, float b, float c);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMulAddFpscrDelegate(float a, float b, float c, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMulSubDelegate(float a, float b, float c);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMulSubFpscrDelegate(float a, float b, float c, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPMulXDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPNegMulAddDelegate(float a, float b, float c);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPNegMulSubDelegate(float a, float b, float c);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPRecipEstimateDelegate(float a);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPRecipEstimateFpscrDelegate(float a, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPRecipStepDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPRecipStepFusedDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPRecpXDelegate(float a);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPRSqrtEstimateDelegate(float a);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPRSqrtEstimateFpscrDelegate(float a, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPRSqrtStepDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPRSqrtStepFusedDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPSqrtDelegate(float a);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate float SoftFloat32FPSubDelegate(float a, float b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ushort SoftFloat32_16FPConvertDelegate(float value);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPAddDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPAddFpscrDelegate(double a, double b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate int SoftFloat64FPCompareDelegate(double a, double b, byte signalNaNs);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPCompareEQDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPCompareEQFpscrDelegate(double a, double b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPCompareGEDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPCompareGEFpscrDelegate(double a, double b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPCompareGTDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPCompareGTFpscrDelegate(double a, double b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPCompareLEDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPCompareLEFpscrDelegate(double a, double b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPCompareLTDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPCompareLTFpscrDelegate(double a, double b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPDivDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMaxDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMaxFpscrDelegate(double a, double b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMaxNumDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMaxNumFpscrDelegate(double a, double b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMinDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMinFpscrDelegate(double a, double b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMinNumDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMinNumFpscrDelegate(double a, double b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMulDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMulFpscrDelegate(double a, double b, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMulAddDelegate(double a, double b, double c);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMulAddFpscrDelegate(double a, double b, double c, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMulSubDelegate(double a, double b, double c);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMulSubFpscrDelegate(double a, double b, double c, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPMulXDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPNegMulAddDelegate(double a, double b, double c);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPNegMulSubDelegate(double a, double b, double c);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPRecipEstimateDelegate(double a);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPRecipEstimateFpscrDelegate(double a, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPRecipStepDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPRecipStepFusedDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPRecpXDelegate(double a);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPRSqrtEstimateDelegate(double a);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPRSqrtEstimateFpscrDelegate(double a, byte standardFpscr);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPRSqrtStepDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPRSqrtStepFusedDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPSqrtDelegate(double a);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate double SoftFloat64FPSubDelegate(double a, double b);
++        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
++        public delegate ushort SoftFloat64_16FPConvertDelegate(double value);
++
++        private static readonly Dictionary<string, Delegate> _androidDelegates;
++#endif
+         public static bool TryGetDelegateFuncPtrByIndex(int index, out nint funcPtr)
+         {
+             if (index >= 0 && index < _delegates.Count)
+@@ -53,20 +400,229 @@ namespace ARMeilleure.Translation
+         {
+             string key = GetKey(method);
+ 
+-            _delegates.Add(key, new DelegateInfo(method.MethodHandle.GetFunctionPointer())); // ArgumentException (key).
++#if ANDROID
++            if (_androidDelegates.TryGetValue(key, out Delegate del))
++            {
++                nint funcPtr = Marshal.GetFunctionPointerForDelegate(del);
++                _delegates.Add(key, new DelegateInfo(funcPtr));
++                return;
++            }
++#endif
++
++            try
++            {
++                _delegates.Add(key, new DelegateInfo(method.MethodHandle.GetFunctionPointer()));
++            }
++            catch (NotSupportedException) when (IsRunningOnAndroid())
++            {
++                throw new PlatformNotSupportedException($"Cannot obtain function pointer {key}: it must be registered.");
++            }
++        }
++
++        private static bool IsRunningOnAndroid()
++        {
++#if ANDROID
++            return true;
++#else
++            return false;
++#endif
+         }
+ 
+         private static string GetKey(MethodInfo info)
+         {
+-            return $"{info.DeclaringType.Name}.{info.Name}";
++            return $"{info.DeclaringType?.Name}.{info.Name}";
+         }
+ 
+         private static readonly SortedList<string, DelegateInfo> _delegates;
+ 
+-        static Delegates()
++        unsafe static Delegates()
+         {
+             _delegates = new SortedList<string, DelegateInfo>();
+ 
++#if ANDROID
++            _androidDelegates = new Dictionary<string, Delegate>
++            {
++                // MathHelper delegates
++                { "MathHelper.Abs", new MathHelperAbsDelegate(Math.Abs) },
++                { "MathHelper.Ceiling", new MathHelperCeilingDelegate(Math.Ceiling) },
++                { "MathHelper.Floor", new MathHelperFloorDelegate(Math.Floor) },
++                { "MathHelper.Round", new MathHelperRoundDelegate((value, mode) => Math.Round(value, (MidpointRounding)mode)) },
++                { "MathHelper.Truncate", new MathHelperTruncateDelegate(Math.Truncate) },
++                
++                // MathHelperF delegates
++                { "MathHelperF.Abs", new MathHelperFAbsDelegate(MathF.Abs) },
++                { "MathHelperF.Ceiling", new MathHelperFCeilingDelegate(MathF.Ceiling) },
++                { "MathHelperF.Floor", new MathHelperFFloorDelegate(MathF.Floor) },
++                { "MathHelperF.Round", new MathHelperFRoundDelegate((value, mode) => MathF.Round(value, (MidpointRounding)mode)) },
++                { "MathHelperF.Truncate", new MathHelperFTruncateDelegate(MathF.Truncate) },
++                
++                // NativeInterface delegates
++                { "NativeInterface.Break", new NativeInterfaceBreakDelegate(NativeInterface.Break) },
++                { "NativeInterface.CheckSynchronization", new NativeInterfaceCheckSynchronizationDelegate(NativeInterface.CheckSynchronization) },
++                { "NativeInterface.EnqueueForRejit", new NativeInterfaceEnqueueForRejitDelegate(NativeInterface.EnqueueForRejit) },
++                { "NativeInterface.GetCntfrqEl0", new NativeInterfaceGetCntfrqEl0Delegate(NativeInterface.GetCntfrqEl0) },
++                { "NativeInterface.GetCntpctEl0", new NativeInterfaceGetCntpctEl0Delegate(NativeInterface.GetCntpctEl0) },
++                { "NativeInterface.GetCntvctEl0", new NativeInterfaceGetCntvctEl0Delegate(NativeInterface.GetCntvctEl0) },
++                { "NativeInterface.GetCtrEl0", new NativeInterfaceGetCtrEl0Delegate(NativeInterface.GetCtrEl0) },
++                { "NativeInterface.GetDczidEl0", new NativeInterfaceGetDczidEl0Delegate(NativeInterface.GetDczidEl0) },
++                { "NativeInterface.GetFunctionAddress", new NativeInterfaceGetFunctionAddressDelegate(NativeInterface.GetFunctionAddress) },
++                { "NativeInterface.InvalidateCacheLine", new NativeInterfaceInvalidateCacheLineDelegate(NativeInterface.InvalidateCacheLine) },
++                { "NativeInterface.ReadByte", new NativeInterfaceReadByteDelegate(NativeInterface.ReadByte) },
++                { "NativeInterface.ReadUInt16", new NativeInterfaceReadUInt16Delegate(NativeInterface.ReadUInt16) },
++                { "NativeInterface.ReadUInt32", new NativeInterfaceReadUInt32Delegate(NativeInterface.ReadUInt32) },
++                { "NativeInterface.ReadUInt64", new NativeInterfaceReadUInt64Delegate(NativeInterface.ReadUInt64) },
++                { "NativeInterface.ReadVector128", new NativeInterfaceReadVector128Delegate(NativeInterface.ReadVector128) },
++                { "NativeInterface.SignalMemoryTracking", new NativeInterfaceSignalMemoryTrackingDelegate(NativeInterface.SignalMemoryTracking) },
++                { "NativeInterface.SupervisorCall", new NativeInterfaceSupervisorCallDelegate(NativeInterface.SupervisorCall) },
++                { "NativeInterface.ThrowInvalidMemoryAccess", new NativeInterfaceThrowInvalidMemoryAccessDelegate(NativeInterface.ThrowInvalidMemoryAccess) },
++                { "NativeInterface.Undefined", new NativeInterfaceUndefinedDelegate(NativeInterface.Undefined) },
++                { "NativeInterface.WriteByte", new NativeInterfaceWriteByteDelegate(NativeInterface.WriteByte) },
++                { "NativeInterface.WriteUInt16", new NativeInterfaceWriteUInt16Delegate(NativeInterface.WriteUInt16) },
++                { "NativeInterface.WriteUInt32", new NativeInterfaceWriteUInt32Delegate(NativeInterface.WriteUInt32) },
++                { "NativeInterface.WriteUInt64", new NativeInterfaceWriteUInt64Delegate(NativeInterface.WriteUInt64) },
++                { "NativeInterface.WriteVector128", new NativeInterfaceWriteVector128Delegate(NativeInterface.WriteVector128) },
++                
++                // SoftFallback delegates
++                { "SoftFallback.CountLeadingSigns", new SoftFallbackCountLeadingSignsDelegate(SoftFallback.CountLeadingSigns) },
++                { "SoftFallback.CountLeadingZeros", new SoftFallbackCountLeadingZerosDelegate(SoftFallback.CountLeadingZeros) },
++                { "SoftFallback.Crc32b", new SoftFallbackCrc32bDelegate(SoftFallback.Crc32b) },
++                { "SoftFallback.Crc32cb", new SoftFallbackCrc32cbDelegate(SoftFallback.Crc32cb) },
++                { "SoftFallback.Crc32ch", new SoftFallbackCrc32chDelegate(SoftFallback.Crc32ch) },
++                { "SoftFallback.Crc32cw", new SoftFallbackCrc32cwDelegate(SoftFallback.Crc32cw) },
++                { "SoftFallback.Crc32cx", new SoftFallbackCrc32cxDelegate(SoftFallback.Crc32cx) },
++                { "SoftFallback.Crc32h", new SoftFallbackCrc32hDelegate(SoftFallback.Crc32h) },
++                { "SoftFallback.Crc32w", new SoftFallbackCrc32wDelegate(SoftFallback.Crc32w) },
++                { "SoftFallback.Crc32x", new SoftFallbackCrc32xDelegate(SoftFallback.Crc32x) },
++                { "SoftFallback.Decrypt", new SoftFallbackDecryptDelegate(SoftFallback.Decrypt) },
++                { "SoftFallback.Encrypt", new SoftFallbackEncryptDelegate(SoftFallback.Encrypt) },
++                { "SoftFallback.FixedRotate", new SoftFallbackFixedRotateDelegate(SoftFallback.FixedRotate) },
++                { "SoftFallback.HashChoose", new SoftFallbackHashChooseDelegate(SoftFallback.HashChoose) },
++                { "SoftFallback.HashLower", new SoftFallbackHashLowerDelegate(SoftFallback.HashLower) },
++                { "SoftFallback.HashMajority", new SoftFallbackHashMajorityDelegate(SoftFallback.HashMajority) },
++                { "SoftFallback.HashParity", new SoftFallbackHashParityDelegate(SoftFallback.HashParity) },
++                { "SoftFallback.HashUpper", new SoftFallbackHashUpperDelegate(SoftFallback.HashUpper) },
++                { "SoftFallback.InverseMixColumns", new SoftFallbackInverseMixColumnsDelegate(SoftFallback.InverseMixColumns) },
++                { "SoftFallback.MixColumns", new SoftFallbackMixColumnsDelegate(SoftFallback.MixColumns) },
++                { "SoftFallback.PolynomialMult64_128", new SoftFallbackPolynomialMult64_128Delegate(SoftFallback.PolynomialMult64_128) },
++                { "SoftFallback.SatF32ToS32", new SoftFallbackSatF32ToS32Delegate(SoftFallback.SatF32ToS32) },
++                { "SoftFallback.SatF32ToS64", new SoftFallbackSatF32ToS64Delegate(SoftFallback.SatF32ToS64) },
++                { "SoftFallback.SatF32ToU32", new SoftFallbackSatF32ToU32Delegate(SoftFallback.SatF32ToU32) },
++                { "SoftFallback.SatF32ToU64", new SoftFallbackSatF32ToU64Delegate(SoftFallback.SatF32ToU64) },
++                { "SoftFallback.SatF64ToS32", new SoftFallbackSatF64ToS32Delegate(SoftFallback.SatF64ToS32) },
++                { "SoftFallback.SatF64ToS64", new SoftFallbackSatF64ToS64Delegate(SoftFallback.SatF64ToS64) },
++                { "SoftFallback.SatF64ToU32", new SoftFallbackSatF64ToU32Delegate(SoftFallback.SatF64ToU32) },
++                { "SoftFallback.SatF64ToU64", new SoftFallbackSatF64ToU64Delegate(SoftFallback.SatF64ToU64) },
++                { "SoftFallback.Sha1SchedulePart1", new SoftFallbackSha1SchedulePart1Delegate(SoftFallback.Sha1SchedulePart1) },
++                { "SoftFallback.Sha1SchedulePart2", new SoftFallbackSha1SchedulePart2Delegate(SoftFallback.Sha1SchedulePart2) },
++                { "SoftFallback.Sha256SchedulePart1", new SoftFallbackSha256SchedulePart1Delegate(SoftFallback.Sha256SchedulePart1) },
++                { "SoftFallback.Sha256SchedulePart2", new SoftFallbackSha256SchedulePart2Delegate(SoftFallback.Sha256SchedulePart2) },
++                { "SoftFallback.SignedShrImm64", new SoftFallbackSignedShrImm64Delegate(SoftFallback.SignedShrImm64) },
++                { "SoftFallback.Tbl1", new SoftFallbackTbl1Delegate(SoftFallback.Tbl1) },
++                { "SoftFallback.Tbl2", new SoftFallbackTbl2Delegate(SoftFallback.Tbl2) },
++                { "SoftFallback.Tbl3", new SoftFallbackTbl3Delegate(SoftFallback.Tbl3) },
++                { "SoftFallback.Tbl4", new SoftFallbackTbl4Delegate(SoftFallback.Tbl4) },
++                { "SoftFallback.Tbx1", new SoftFallbackTbx1Delegate(SoftFallback.Tbx1) },
++                { "SoftFallback.Tbx2", new SoftFallbackTbx2Delegate(SoftFallback.Tbx2) },
++                { "SoftFallback.Tbx3", new SoftFallbackTbx3Delegate(SoftFallback.Tbx3) },
++                { "SoftFallback.Tbx4", new SoftFallbackTbx4Delegate(SoftFallback.Tbx4) },
++                { "SoftFallback.UnsignedShrImm64", new SoftFallbackUnsignedShrImm64Delegate(SoftFallback.UnsignedShrImm64) },
++                
++                // SoftFloat delegates
++                { "SoftFloat16_32.FPConvert", new SoftFloat16_32FPConvertDelegate(SoftFloat16_32.FPConvert) },
++                { "SoftFloat16_64.FPConvert", new SoftFloat16_64FPConvertDelegate(SoftFloat16_64.FPConvert) },
++                
++                { "SoftFloat32.FPAdd", new SoftFloat32FPAddDelegate(SoftFloat32.FPAdd) },
++                { "SoftFloat32.FPAddFpscr", new SoftFloat32FPAddFpscrDelegate(SoftFloat32.FPAddFpscr) },
++                { "SoftFloat32.FPCompare", new SoftFloat32FPCompareDelegate(SoftFloat32.FPCompare) },
++                { "SoftFloat32.FPCompareEQ", new SoftFloat32FPCompareEQDelegate(SoftFloat32.FPCompareEQ) },
++                { "SoftFloat32.FPCompareEQFpscr", new SoftFloat32FPCompareEQFpscrDelegate(SoftFloat32.FPCompareEQFpscr) },
++                { "SoftFloat32.FPCompareGE", new SoftFloat32FPCompareGEDelegate(SoftFloat32.FPCompareGE) },
++                { "SoftFloat32.FPCompareGEFpscr", new SoftFloat32FPCompareGEFpscrDelegate(SoftFloat32.FPCompareGEFpscr) },
++                { "SoftFloat32.FPCompareGT", new SoftFloat32FPCompareGTDelegate(SoftFloat32.FPCompareGT) },
++                { "SoftFloat32.FPCompareGTFpscr", new SoftFloat32FPCompareGTFpscrDelegate(SoftFloat32.FPCompareGTFpscr) },
++                { "SoftFloat32.FPCompareLE", new SoftFloat32FPCompareLEDelegate(SoftFloat32.FPCompareLE) },
++                { "SoftFloat32.FPCompareLEFpscr", new SoftFloat32FPCompareLEFpscrDelegate(SoftFloat32.FPCompareLEFpscr) },
++                { "SoftFloat32.FPCompareLT", new SoftFloat32FPCompareLTDelegate(SoftFloat32.FPCompareLT) },
++                { "SoftFloat32.FPCompareLTFpscr", new SoftFloat32FPCompareLTFpscrDelegate(SoftFloat32.FPCompareLTFpscr) },
++                { "SoftFloat32.FPDiv", new SoftFloat32FPDivDelegate(SoftFloat32.FPDiv) },
++                { "SoftFloat32.FPMax", new SoftFloat32FPMaxDelegate(SoftFloat32.FPMax) },
++                { "SoftFloat32.FPMaxFpscr", new SoftFloat32FPMaxFpscrDelegate(SoftFloat32.FPMaxFpscr) },
++                { "SoftFloat32.FPMaxNum", new SoftFloat32FPMaxNumDelegate(SoftFloat32.FPMaxNum) },
++                { "SoftFloat32.FPMaxNumFpscr", new SoftFloat32FPMaxNumFpscrDelegate(SoftFloat32.FPMaxNumFpscr) },
++                { "SoftFloat32.FPMin", new SoftFloat32FPMinDelegate(SoftFloat32.FPMin) },
++                { "SoftFloat32.FPMinFpscr", new SoftFloat32FPMinFpscrDelegate(SoftFloat32.FPMinFpscr) },
++                { "SoftFloat32.FPMinNum", new SoftFloat32FPMinNumDelegate(SoftFloat32.FPMinNum) },
++                { "SoftFloat32.FPMinNumFpscr", new SoftFloat32FPMinNumFpscrDelegate(SoftFloat32.FPMinNumFpscr) },
++                { "SoftFloat32.FPMul", new SoftFloat32FPMulDelegate(SoftFloat32.FPMul) },
++                { "SoftFloat32.FPMulFpscr", new SoftFloat32FPMulFpscrDelegate(SoftFloat32.FPMulFpscr) },
++                { "SoftFloat32.FPMulAdd", new SoftFloat32FPMulAddDelegate(SoftFloat32.FPMulAdd) },
++                { "SoftFloat32.FPMulAddFpscr", new SoftFloat32FPMulAddFpscrDelegate(SoftFloat32.FPMulAddFpscr) },
++                { "SoftFloat32.FPMulSub", new SoftFloat32FPMulSubDelegate(SoftFloat32.FPMulSub) },
++                { "SoftFloat32.FPMulSubFpscr", new SoftFloat32FPMulSubFpscrDelegate(SoftFloat32.FPMulSubFpscr) },
++                { "SoftFloat32.FPMulX", new SoftFloat32FPMulXDelegate(SoftFloat32.FPMulX) },
++                { "SoftFloat32.FPNegMulAdd", new SoftFloat32FPNegMulAddDelegate(SoftFloat32.FPNegMulAdd) },
++                { "SoftFloat32.FPNegMulSub", new SoftFloat32FPNegMulSubDelegate(SoftFloat32.FPNegMulSub) },
++                { "SoftFloat32.FPRecipEstimate", new SoftFloat32FPRecipEstimateDelegate(SoftFloat32.FPRecipEstimate) },
++                { "SoftFloat32.FPRecipEstimateFpscr", new SoftFloat32FPRecipEstimateFpscrDelegate(SoftFloat32.FPRecipEstimateFpscr) },
++                { "SoftFloat32.FPRecipStep", new SoftFloat32FPRecipStepDelegate(SoftFloat32.FPRecipStep) },
++                { "SoftFloat32.FPRecipStepFused", new SoftFloat32FPRecipStepFusedDelegate(SoftFloat32.FPRecipStepFused) },
++                { "SoftFloat32.FPRecpX", new SoftFloat32FPRecpXDelegate(SoftFloat32.FPRecpX) },
++                { "SoftFloat32.FPRSqrtEstimate", new SoftFloat32FPRSqrtEstimateDelegate(SoftFloat32.FPRSqrtEstimate) },
++                { "SoftFloat32.FPRSqrtEstimateFpscr", new SoftFloat32FPRSqrtEstimateFpscrDelegate(SoftFloat32.FPRSqrtEstimateFpscr) },
++                { "SoftFloat32.FPRSqrtStep", new SoftFloat32FPRSqrtStepDelegate(SoftFloat32.FPRSqrtStep) },
++                { "SoftFloat32.FPRSqrtStepFused", new SoftFloat32FPRSqrtStepFusedDelegate(SoftFloat32.FPRSqrtStepFused) },
++                { "SoftFloat32.FPSqrt", new SoftFloat32FPSqrtDelegate(SoftFloat32.FPSqrt) },
++                { "SoftFloat32.FPSub", new SoftFloat32FPSubDelegate(SoftFloat32.FPSub) },
++                
++                { "SoftFloat32_16.FPConvert", new SoftFloat32_16FPConvertDelegate(SoftFloat32_16.FPConvert) },
++                
++                { "SoftFloat64.FPAdd", new SoftFloat64FPAddDelegate(SoftFloat64.FPAdd) },
++                { "SoftFloat64.FPAddFpscr", new SoftFloat64FPAddFpscrDelegate(SoftFloat64.FPAddFpscr) },
++                { "SoftFloat64.FPCompare", new SoftFloat64FPCompareDelegate(SoftFloat64.FPCompare) },
++                { "SoftFloat64.FPCompareEQ", new SoftFloat64FPCompareEQDelegate(SoftFloat64.FPCompareEQ) },
++                { "SoftFloat64.FPCompareEQFpscr", new SoftFloat64FPCompareEQFpscrDelegate(SoftFloat64.FPCompareEQFpscr) },
++                { "SoftFloat64.FPCompareGE", new SoftFloat64FPCompareGEDelegate(SoftFloat64.FPCompareGE) },
++                { "SoftFloat64.FPCompareGEFpscr", new SoftFloat64FPCompareGEFpscrDelegate(SoftFloat64.FPCompareGEFpscr) },
++                { "SoftFloat64.FPCompareGT", new SoftFloat64FPCompareGTDelegate(SoftFloat64.FPCompareGT) },
++                { "SoftFloat64.FPCompareGTFpscr", new SoftFloat64FPCompareGTFpscrDelegate(SoftFloat64.FPCompareGTFpscr) },
++                { "SoftFloat64.FPCompareLE", new SoftFloat64FPCompareLEDelegate(SoftFloat64.FPCompareLE) },
++                { "SoftFloat64.FPCompareLEFpscr", new SoftFloat64FPCompareLEFpscrDelegate(SoftFloat64.FPCompareLEFpscr) },
++                { "SoftFloat64.FPCompareLT", new SoftFloat64FPCompareLTDelegate(SoftFloat64.FPCompareLT) },
++                { "SoftFloat64.FPCompareLTFpscr", new SoftFloat64FPCompareLTFpscrDelegate(SoftFloat64.FPCompareLTFpscr) },
++                { "SoftFloat64.FPDiv", new SoftFloat64FPDivDelegate(SoftFloat64.FPDiv) },
++                { "SoftFloat64.FPMax", new SoftFloat64FPMaxDelegate(SoftFloat64.FPMax) },
++                { "SoftFloat64.FPMaxFpscr", new SoftFloat64FPMaxFpscrDelegate(SoftFloat64.FPMaxFpscr) },
++                { "SoftFloat64.FPMaxNum", new SoftFloat64FPMaxNumDelegate(SoftFloat64.FPMaxNum) },
++                { "SoftFloat64.FPMaxNumFpscr", new SoftFloat64FPMaxNumFpscrDelegate(SoftFloat64.FPMaxNumFpscr) },
++                { "SoftFloat64.FPMin", new SoftFloat64FPMinDelegate(SoftFloat64.FPMin) },
++                { "SoftFloat64.FPMinFpscr", new SoftFloat64FPMinFpscrDelegate(SoftFloat64.FPMinFpscr) },
++                { "SoftFloat64.FPMinNum", new SoftFloat64FPMinNumDelegate(SoftFloat64.FPMinNum) },
++                { "SoftFloat64.FPMinNumFpscr", new SoftFloat64FPMinNumFpscrDelegate(SoftFloat64.FPMinNumFpscr) },
++                { "SoftFloat64.FPMul", new SoftFloat64FPMulDelegate(SoftFloat64.FPMul) },
++                { "SoftFloat64.FPMulFpscr", new SoftFloat64FPMulFpscrDelegate(SoftFloat64.FPMulFpscr) },
++                { "SoftFloat64.FPMulAdd", new SoftFloat64FPMulAddDelegate(SoftFloat64.FPMulAdd) },
++                { "SoftFloat64.FPMulAddFpscr", new SoftFloat64FPMulAddFpscrDelegate(SoftFloat64.FPMulAddFpscr) },
++                { "SoftFloat64.FPMulSub", new SoftFloat64FPMulSubDelegate(SoftFloat64.FPMulSub) },
++                { "SoftFloat64.FPMulSubFpscr", new SoftFloat64FPMulSubFpscrDelegate(SoftFloat64.FPMulSubFpscr) },
++                { "SoftFloat64.FPMulX", new SoftFloat64FPMulXDelegate(SoftFloat64.FPMulX) },
++                { "SoftFloat64.FPNegMulAdd", new SoftFloat64FPNegMulAddDelegate(SoftFloat64.FPNegMulAdd) },
++                { "SoftFloat64.FPNegMulSub", new SoftFloat64FPNegMulSubDelegate(SoftFloat64.FPNegMulSub) },
++                { "SoftFloat64.FPRecipEstimate", new SoftFloat64FPRecipEstimateDelegate(SoftFloat64.FPRecipEstimate) },
++                { "SoftFloat64.FPRecipEstimateFpscr", new SoftFloat64FPRecipEstimateFpscrDelegate(SoftFloat64.FPRecipEstimateFpscr) },
++                { "SoftFloat64.FPRecipStep", new SoftFloat64FPRecipStepDelegate(SoftFloat64.FPRecipStep) },
++                { "SoftFloat64.FPRecipStepFused", new SoftFloat64FPRecipStepFusedDelegate(SoftFloat64.FPRecipStepFused) },
++                { "SoftFloat64.FPRecpX", new SoftFloat64FPRecpXDelegate(SoftFloat64.FPRecpX) },
++                { "SoftFloat64.FPRSqrtEstimate", new SoftFloat64FPRSqrtEstimateDelegate(SoftFloat64.FPRSqrtEstimate) },
++                { "SoftFloat64.FPRSqrtEstimateFpscr", new SoftFloat64FPRSqrtEstimateFpscrDelegate(SoftFloat64.FPRSqrtEstimateFpscr) },
++                { "SoftFloat64.FPRSqrtStep", new SoftFloat64FPRSqrtStepDelegate(SoftFloat64.FPRSqrtStep) },
++                { "SoftFloat64.FPRSqrtStepFused", new SoftFloat64FPRSqrtStepFusedDelegate(SoftFloat64.FPRSqrtStepFused) },
++                { "SoftFloat64.FPSqrt", new SoftFloat64FPSqrtDelegate(SoftFloat64.FPSqrt) },
++                { "SoftFloat64.FPSub", new SoftFloat64FPSubDelegate(SoftFloat64.FPSub) },
++                
++                { "SoftFloat64_16.FPConvert", new SoftFloat64_16FPConvertDelegate(SoftFloat64_16.FPConvert) }
++            };
++#endif
++
+             SetDelegateInfo(typeof(MathHelper).GetMethod(nameof(MathHelper.Abs)));
+             SetDelegateInfo(typeof(MathHelper).GetMethod(nameof(MathHelper.Ceiling)));
+             SetDelegateInfo(typeof(MathHelper).GetMethod(nameof(MathHelper.Floor)));
+@@ -152,44 +708,44 @@ namespace ARMeilleure.Translation
+             SetDelegateInfo(typeof(SoftFloat16_64).GetMethod(nameof(SoftFloat16_64.FPConvert)));
+ 
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPAdd)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPAddFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPAddFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompare)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareEQ)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareEQFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareEQFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareGE)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareGEFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareGEFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareGT)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareGTFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareGTFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareLE)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareLEFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareLEFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareLT)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareLTFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPCompareLTFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPDiv)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMax)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMaxFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMaxFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMaxNum)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMaxNumFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMaxNumFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMin)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMinFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMinFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMinNum)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMinNumFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMinNumFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMul)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMulFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMulFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMulAdd)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMulAddFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMulAddFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMulSub)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMulSubFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMulSubFpscr)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPMulX)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPNegMulAdd)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPNegMulSub)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRecipEstimate)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRecipEstimateFpscr))); // A32 only.
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRecipStep))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRecipEstimateFpscr)));
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRecipStep)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRecipStepFused)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRecpX)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRSqrtEstimate)));
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRSqrtEstimateFpscr))); // A32 only.
+-            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRSqrtStep))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRSqrtEstimateFpscr)));
++            SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRSqrtStep)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPRSqrtStepFused)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPSqrt)));
+             SetDelegateInfo(typeof(SoftFloat32).GetMethod(nameof(SoftFloat32.FPSub)));
+@@ -197,44 +753,44 @@ namespace ARMeilleure.Translation
+             SetDelegateInfo(typeof(SoftFloat32_16).GetMethod(nameof(SoftFloat32_16.FPConvert)));
+ 
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPAdd)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPAddFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPAddFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompare)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareEQ)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareEQFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareEQFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareGE)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareGEFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareGEFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareGT)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareGTFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareGTFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareLE)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareLEFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareLEFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareLT)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareLTFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPCompareLTFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPDiv)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMax)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMaxFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMaxFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMaxNum)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMaxNumFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMaxNumFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMin)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMinFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMinFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMinNum)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMinNumFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMinNumFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMul)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMulFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMulFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMulAdd)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMulAddFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMulAddFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMulSub)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMulSubFpscr))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMulSubFpscr)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPMulX)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPNegMulAdd)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPNegMulSub)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRecipEstimate)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRecipEstimateFpscr))); // A32 only.
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRecipStep))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRecipEstimateFpscr)));
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRecipStep)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRecipStepFused)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRecpX)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRSqrtEstimate)));
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRSqrtEstimateFpscr))); // A32 only.
+-            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRSqrtStep))); // A32 only.
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRSqrtEstimateFpscr)));
++            SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRSqrtStep)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPRSqrtStepFused)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPSqrt)));
+             SetDelegateInfo(typeof(SoftFloat64).GetMethod(nameof(SoftFloat64.FPSub)));
+diff --git a/src/ARMeilleure/Translation/EmitterContext.cs b/src/ARMeilleure/Translation/EmitterContext.cs
+index 3d800e16f..7e3090310 100644
+--- a/src/ARMeilleure/Translation/EmitterContext.cs
++++ b/src/ARMeilleure/Translation/EmitterContext.cs
+@@ -97,7 +97,14 @@ namespace ARMeilleure.Translation
+ 
+         public virtual Operand Call(MethodInfo info, params Operand[] callArgs)
+         {
++#if ANDROID
++            // For Android, use the Delegates class to get the function pointer
++            int index = Delegates.GetDelegateIndex(info);
++            nint funcPtr = Delegates.GetDelegateFuncPtrByIndex(index);
++#else
++            // For other platforms, use direct method handle approach
+             nint funcPtr = info.MethodHandle.GetFunctionPointer();
++#endif
+ 
+             OperandType returnType = GetOperandType(info.ReturnType);
+ 
+@@ -668,8 +675,7 @@ namespace ARMeilleure.Translation
+             Operation last = block.Operations.Last;
+ 
+             return last != default &&
+-               (last.Instruction == Instruction.Return ||
+-                last.Instruction == Instruction.Tailcall);
++               last.Instruction is Instruction.Return or Instruction.Tailcall;
+         }
+ 
+         public ControlFlowGraph GetControlFlowGraph()
+-- 
+2.55.0
+

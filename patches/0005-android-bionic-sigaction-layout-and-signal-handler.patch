@@ -1,0 +1,323 @@
+From 0000000000000000000000000000000000000005 Mon Sep 17 00:00:00 2001
+From: Jochem Kuipers <jochem@kuipers.cc>
+Date: Sun, 12 Jul 2026 02:00:00 +0200
+Subject: [PATCH 5/5] android: bionic sigaction layout and signal handler offsets
+
+Ported from Kenji-NX libryujinx_bionic: bionic's struct sigaction field order
+differs from glibc, so memory tracking SIGSEGV handlers must use SigActionBionic
+and correct si_addr/si_code offsets or guest faults crash the host process.
+
+---
+ diff --git a/src/Ryujinx.Cpu/Signal/NativeSignalHandler.cs b/src/Ryujinx.Cpu/Signal/NativeSignalHandler.cs
+index c271636c1..0c1206cf2 100644
+--- a/src/Ryujinx.Cpu/Signal/NativeSignalHandler.cs
++++ b/src/Ryujinx.Cpu/Signal/NativeSignalHandler.cs
+@@ -89,10 +89,16 @@ namespace Ryujinx.Cpu.Signal
+ 
+                 ref SignalHandlerConfig config = ref GetConfigRef();
+ 
+-                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
++                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
+                 {
+                     _signalHandlerPtr = MapCode(NativeSignalHandlerGenerator.GenerateUnixSignalHandler(_handlerConfig, rangeStructSize));
+ 
++                    if (PlatformInfo.IsBionic)
++                    {
++                        config.StructAddressOffset = 16; // si_addr
++                        config.StructWriteOffset = 8; // si_code
++                    }
++
+                     if (customSignalHandlerFactory != null)
+                     {
+                         _signalHandlerPtr = customSignalHandlerFactory(UnixSignalHandlerRegistration.GetSegfaultExceptionHandler().sa_handler, _signalHandlerPtr);
+@@ -122,6 +128,21 @@ namespace Ryujinx.Cpu.Signal
+             }
+         }
+ 
++        public static void InstallUnixAlternateStackForCurrentThread(nint stackPtr, ulong stackSize)
++        {
++            UnixSignalHandlerRegistration.RegisterAlternateStack(stackPtr, stackSize);
++        }
++
++        public static void UninstallUnixAlternateStackForCurrentThread()
++        {
++            UnixSignalHandlerRegistration.UnregisterAlternateStack();
++        }
++
++        public static void InstallUnixSignalHandler(int sigNum, nint action)
++        {
++            UnixSignalHandlerRegistration.RegisterExceptionHandler(sigNum, action);
++        }
++
+         private static nint MapCode(ReadOnlySpan<byte> code)
+         {
+             Debug.Assert(_codeBlock == null);
+diff --git a/src/Ryujinx.Cpu/Signal/UnixSignalHandlerRegistration.cs b/src/Ryujinx.Cpu/Signal/UnixSignalHandlerRegistration.cs
+index d40e7cdc9..ef0b37d65 100644
+--- a/src/Ryujinx.Cpu/Signal/UnixSignalHandlerRegistration.cs
++++ b/src/Ryujinx.Cpu/Signal/UnixSignalHandlerRegistration.cs
+@@ -1,8 +1,12 @@
++using Ryujinx.Common;
+ using System;
++using System.Diagnostics.CodeAnalysis;
+ using System.Runtime.InteropServices;
++using System.Runtime.Versioning;
+ 
+ namespace Ryujinx.Cpu.Signal
+ {
++    [SuppressMessage("Interoperability", "CA1416:Validate platform compatibility")]
+     static partial class UnixSignalHandlerRegistration
+     {
+         [StructLayout(LayoutKind.Sequential, Pack = 1)]
+@@ -20,26 +24,73 @@ namespace Ryujinx.Cpu.Signal
+             public nint sa_restorer;
+         }
+ 
++        [SupportedOSPlatform("android"), StructLayout(LayoutKind.Sequential, Pack = 8)]
++        public struct SigActionBionic
++        {
++            public int sa_flags;
++            public nint sa_handler;
++            public SigSet sa_mask;
++            public nint sa_restorer;
++        }
++
++        [StructLayout(LayoutKind.Sequential, Pack = 8)]
++        public struct Stack
++        {
++            public nint ss_sp;
++            public int ss_flags;
++            public nint ss_size;
++        }
++
+         private const int SIGSEGV = 11;
+         private const int SIGBUS = 10;
+         private const int SA_SIGINFO = 0x00000004;
++        private const int SA_ONSTACK = 0x08000000;
++        private const int SS_DISABLE = 2;
++        private const int SS_AUTODISARM = 1 << 31;
+ 
+         [LibraryImport("libc", SetLastError = true)]
+         private static partial int sigaction(int signum, ref SigAction sigAction, out SigAction oldAction);
+ 
++        [SupportedOSPlatform("android"), LibraryImport("libc", SetLastError = true)]
++        private static partial int sigaction(int signum, ref SigActionBionic sigAction, out SigActionBionic oldAction);
++
+         [LibraryImport("libc", SetLastError = true)]
+         private static partial int sigaction(int signum, nint sigAction, out SigAction oldAction);
+ 
++        [SupportedOSPlatform("android"), LibraryImport("libc", SetLastError = true)]
++        private static partial int sigaction(int signum, nint sigAction, out SigActionBionic oldAction);
++
+         [LibraryImport("libc", SetLastError = true)]
+         private static partial int sigemptyset(ref SigSet set);
+ 
++        [LibraryImport("libc", SetLastError = true)]
++        private static partial int sigaltstack(ref Stack ss, out Stack oldSs);
++
+         public static SigAction GetSegfaultExceptionHandler()
+         {
+-            int result = sigaction(SIGSEGV, nint.Zero, out SigAction old);
++            int result;
++            SigAction old;
++
++            if (PlatformInfo.IsBionic)
++            {
++                result = sigaction(SIGSEGV, nint.Zero, out SigActionBionic tmp);
++
++                old = new SigAction
++                {
++                    sa_handler = tmp.sa_handler,
++                    sa_mask = tmp.sa_mask,
++                    sa_flags = tmp.sa_flags,
++                    sa_restorer = tmp.sa_restorer
++                };
++            }
++            else
++            {
++                result = sigaction(SIGSEGV, nint.Zero, out old);
++            }
+ 
+             if (result != 0)
+             {
+-                throw new InvalidOperationException($"Could not get SIGSEGV sigaction. Error: {result}");
++                throw new InvalidOperationException($"Could not get SIGSEGV sigaction. Error: {Marshal.GetLastPInvokeErrorMessage()}");
+             }
+ 
+             return old;
+@@ -47,37 +98,164 @@ namespace Ryujinx.Cpu.Signal
+ 
+         public static SigAction RegisterExceptionHandler(nint action)
+         {
+-            SigAction sig = new()
++            int result;
++            SigAction old;
++
++            if (PlatformInfo.IsBionic)
++            {
++                SigActionBionic sig = new()
++                {
++                    sa_handler = action,
++                    sa_flags = SA_SIGINFO | SA_ONSTACK,
++                };
++
++                sigemptyset(ref sig.sa_mask);
++
++                result = sigaction(SIGSEGV, ref sig, out SigActionBionic tmp);
++
++                old = new SigAction
++                {
++                    sa_handler = tmp.sa_handler,
++                    sa_mask = tmp.sa_mask,
++                    sa_flags = tmp.sa_flags,
++                    sa_restorer = tmp.sa_restorer
++                };
++            }
++            else
++            {
++                SigAction sig = new()
++                {
++                    sa_handler = action,
++                    sa_flags = SA_SIGINFO,
++                };
++
++                sigemptyset(ref sig.sa_mask);
++
++                result = sigaction(SIGSEGV, ref sig, out old);
++
++                if (result != 0)
++                {
++                    throw new InvalidOperationException($"Could not register SIGSEGV sigaction. Error: {Marshal.GetLastPInvokeErrorMessage()}");
++                }
++
++                if (OperatingSystem.IsMacOS())
++                {
++                    result = sigaction(SIGBUS, ref sig, out _);
++
++                    if (result != 0)
++                    {
++                        throw new InvalidOperationException($"Could not register SIGBUS sigaction. Error: {Marshal.GetLastPInvokeErrorMessage()}");
++                    }
++                }
++            }
++
++            if (PlatformInfo.IsBionic && result != 0)
+             {
+-                sa_handler = action,
+-                sa_flags = SA_SIGINFO,
++                throw new InvalidOperationException($"Could not register SIGSEGV sigaction. Error: {Marshal.GetLastPInvokeErrorMessage()}");
++            }
++
++            return old;
++        }
++
++        public static void RegisterAlternateStack(nint stackPtr, ulong stackSize)
++        {
++            Stack stack = new()
++            {
++                ss_sp = stackPtr,
++                ss_flags = SS_AUTODISARM,
++                ss_size = (nint)stackSize
+             };
+ 
+-            sigemptyset(ref sig.sa_mask);
++            int result = sigaltstack(ref stack, out _);
+ 
+-            int result = sigaction(SIGSEGV, ref sig, out SigAction old);
++            if (result != 0)
++            {
++                throw new InvalidOperationException($"Could not set alternate stack. Error: {Marshal.GetLastPInvokeErrorMessage()}");
++            }
++        }
++
++        public static void UnregisterAlternateStack()
++        {
++            Stack stack = new()
++            {
++                ss_flags = SS_DISABLE
++            };
++
++            int result = sigaltstack(ref stack, out _);
+ 
+             if (result != 0)
+             {
+-                throw new InvalidOperationException($"Could not register SIGSEGV sigaction. Error: {result}");
++                throw new InvalidOperationException($"Could not remove alternate stack. Error: {Marshal.GetLastPInvokeErrorMessage()}");
+             }
++        }
++
++        public static void RegisterExceptionHandler(int sigNum, nint action)
++        {
++            int result;
+ 
+-            if (OperatingSystem.IsMacOS())
++            if (PlatformInfo.IsBionic)
+             {
+-                result = sigaction(SIGBUS, ref sig, out _);
++                SigActionBionic sig = new()
++                {
++                    sa_handler = action,
++                    sa_flags = SA_SIGINFO | SA_ONSTACK
++                };
++
++                sigemptyset(ref sig.sa_mask);
++
++                result = sigaction(sigNum, ref sig, out SigActionBionic oldu);
++
++                if (oldu.sa_handler != nint.Zero)
++                {
++                    throw new InvalidOperationException($"SIG{sigNum} is already in use.");
++                }
+ 
+                 if (result != 0)
+                 {
+-                    throw new InvalidOperationException($"Could not register SIGBUS sigaction. Error: {result}");
++                    throw new InvalidOperationException($"Could not register SIG{sigNum} sigaction. Error: {Marshal.GetLastPInvokeErrorMessage()}");
+                 }
+             }
++            else
++            {
++                SigAction sig = new()
++                {
++                    sa_handler = action,
++                    sa_flags = SA_SIGINFO | SA_ONSTACK,
++                };
+ 
+-            return old;
++                sigemptyset(ref sig.sa_mask);
++
++                result = sigaction(sigNum, ref sig, out SigAction oldu);
++
++                if (oldu.sa_handler != nint.Zero)
++                {
++                    throw new InvalidOperationException($"SIG{sigNum} is already in use.");
++                }
++
++                if (result != 0)
++                {
++                    throw new InvalidOperationException($"Could not register SIG{sigNum} sigaction. Error: {Marshal.GetLastPInvokeErrorMessage()}");
++                }
++            }
+         }
+ 
+         public static bool RestoreExceptionHandler(SigAction oldAction)
+         {
+-            return sigaction(SIGSEGV, ref oldAction, out SigAction _) == 0 && (!OperatingSystem.IsMacOS() || sigaction(SIGBUS, ref oldAction, out SigAction _) == 0);
++            if (PlatformInfo.IsBionic)
++            {
++                SigActionBionic tmp = new()
++                {
++                    sa_handler = oldAction.sa_handler,
++                    sa_mask = oldAction.sa_mask,
++                    sa_flags = oldAction.sa_flags,
++                    sa_restorer = oldAction.sa_restorer
++                };
++
++                return sigaction(SIGSEGV, ref tmp, out SigActionBionic _) == 0;
++            }
++
++            return sigaction(SIGSEGV, ref oldAction, out SigAction _) == 0 &&
++                   (!OperatingSystem.IsMacOS() || sigaction(SIGBUS, ref oldAction, out SigAction _) == 0);
+         }
+     }
+ }

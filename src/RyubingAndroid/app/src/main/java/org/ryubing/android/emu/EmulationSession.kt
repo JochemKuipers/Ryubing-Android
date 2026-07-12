@@ -1,11 +1,14 @@
 package org.ryubing.android.emu
 
+import android.content.Context
 import android.content.ContentResolver
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.view.Surface
+import org.ryubing.android.R
 import org.ryubing.android.RyubingNative
+import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.EmulatorConfig
 import org.ryubing.android.data.GameEntry
 import org.ryubing.android.input.SwitchButton
@@ -18,8 +21,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * forwards lifecycle + input to libryubing.so. One instance per running title.
  */
 class EmulationSession(
+    private val appContext: Context,
     private val appDataPath: String,
     private val contentResolver: ContentResolver,
+    private val driverRepository: DriverRepository,
 ) {
 
     private val buttonState = AtomicInteger(0)
@@ -48,6 +53,14 @@ class EmulationSession(
     /** The SurfaceView hands us its Surface; forward it to the JNI shim. */
     fun setSurface(surface: Surface?) = RyubingNative.setSurface(surface)
 
+    fun setSurfaceRotation(rotation: Int) = RyubingNative.setSurfaceRotation(rotation)
+
+    fun setWindowSize(width: Int, height: Int) {
+        if (width > 0 && height > 0) {
+            RyubingNative.core.ryubing_set_window_size(width, height)
+        }
+    }
+
     /**
      * Opens [game]'s SAF content URI and hands the core an openable path. Android content URIs
      * can't be opened as filesystem paths, so we resolve the URI to a real file descriptor and
@@ -65,6 +78,13 @@ class EmulationSession(
 
         romFd = pfd
         val fdPath = "/proc/self/fd/${pfd.fd}"
+
+        VulkanDriverLoader.apply(
+            appContext,
+            driverRepository,
+            appContext.getString(R.string.system_driver),
+        )
+
         val ok = RyubingNative.core.ryubing_load_application(fdPath, game.title) == 1
         if (!ok) {
             Log.e(TAG, "Failed to load ${game.title} ($fdPath)")

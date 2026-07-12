@@ -32,6 +32,7 @@ typedef struct {
 int ryubing_initialize(const char *appDataPath);
 void ryubing_set_surface_provider(RyubingCreateSurfaceFn createSurface);
 void ryubing_set_callbacks(RyubingCallbacks *callbacks);
+void ryubing_set_vulkan_driver(int64_t driverHandle);
 int ryubing_load_application(const char *path, const char *displayName);
 int ryubing_is_running();
 void ryubing_reload_keys();
@@ -39,6 +40,7 @@ int ryubing_install_firmware(const char *path);
 void ryubing_set_button_state(int buttonMask);
 void ryubing_set_stick_state(int rightStick, float x, float y);
 void ryubing_set_motion_state(float ax, float ay, float az, float gx, float gy, float gz);
+void ryubing_set_window_size(int width, int height);
 void ryubing_stop();
 void ryubing_shutdown();
 

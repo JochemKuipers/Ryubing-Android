@@ -9,7 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import org.ryubing.android.data.EmulatorConfig
+import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.GameRepository
 import org.ryubing.android.data.SettingsRepository
 import org.ryubing.android.emu.EmulationSession
@@ -24,13 +24,20 @@ class MainActivity : ComponentActivity() {
 
         val gameRepo = GameRepository(applicationContext)
         val settingsRepo = SettingsRepository(applicationContext)
-        val session = EmulationSession(filesDir.absolutePath, contentResolver)
+        val driverRepo = DriverRepository(applicationContext)
+        val session = EmulationSession(
+            applicationContext,
+            filesDir.absolutePath,
+            contentResolver,
+            driverRepo,
+        )
 
         setContent {
             RyubingTheme {
                 RyubingApp(
                     gameRepository = gameRepo,
                     settingsRepository = settingsRepo,
+                    driverRepository = driverRepo,
                     session = session,
                 )
             }

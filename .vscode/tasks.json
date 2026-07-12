@@ -95,6 +95,19 @@
             }
         },
         {
+            "label": "android: run (deploy + logcat)",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/android-deploy.sh",
+            "args": ["deploy-logcat"],
+            "isBackground": true,
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            }
+        },
+        {
             "label": "android: devices",
             "type": "shell",
             "command": "${workspaceFolder}/scripts/android-deploy.sh",

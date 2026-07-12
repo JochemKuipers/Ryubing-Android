@@ -30,6 +30,9 @@
     <DefineConstants>$(DefineConstants);ANDROID</DefineConstants>
     <LinkerFlavor>lld</LinkerFlavor>
     <IlcInstructionSet>armv8.2-a</IlcInstructionSet>
+    <!-- net10 NativeAOT Release codegen can AV in Ssa.Rename (nested local functions);
+         disable ILC opts on bionic until the root cause is fixed upstream. -->
+    <IlcDisableOptimizations>true</IlcDisableOptimizations>
     <!-- Pin the driver to the NDK clang (put on PATH by the Gradle publish task). Otherwise
          the ILCompiler's probe can pick up an unrelated 'gcc' (e.g. msys64's) that cannot link
          a linux-bionic ELF — this bites Windows hosts where mingw gcc is on PATH. -->
@@ -69,6 +72,7 @@
        here and we pin versions inline. Keep Silk.NET.Vulkan in sync with
        upstream/ryubing/Directory.Packages.props. -->
   <ItemGroup>
+    <PackageReference Include="Silk.NET.Core" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.23.0" />

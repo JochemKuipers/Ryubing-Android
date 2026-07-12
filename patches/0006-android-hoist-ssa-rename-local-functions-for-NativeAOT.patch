@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
+From: Jochem Kuipers <jochem@kuipers.cc>
+Date: Sun, 12 Jul 2026 02:10:00 +0200
+Subject: [PATCH 6/6] android: hoist Ssa.Rename local functions for NativeAOT
+
+NativeAOT on linux-bionic-arm64 can miscompile nested local functions in
+Ssa.Rename, causing AccessViolation on the first shader compile. Hoist
+RenameLocal/RenameGlobal to static helpers (same logic, no closure capture).
+
+---
+ diff --git a/src/Ryujinx.Graphics.Shader/Translation/Ssa.cs b/src/Ryujinx.Graphics.Shader/Translation/Ssa.cs
+index 89aaa3b44..187d5864a 100644
+--- a/src/Ryujinx.Graphics.Shader/Translation/Ssa.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/Ssa.cs
+@@ -134,18 +134,6 @@ namespace Ryujinx.Graphics.Shader.Translation
+             // First pass, get all defs and locals uses.
+             for (int blkIndex = 0; blkIndex < blocks.Length; blkIndex++)
+             {
+-                Operand RenameLocal(Operand operand)
+-                {
+-                    if (operand != null && operand.Type == OperandType.Register)
+-                    {
+-                        Operand local = localDefs.Get(GetKeyFromRegister(operand.GetRegister()));
+-
+-                        operand = local ?? operand;
+-                    }
+-
+-                    return operand;
+-                }
+-
+                 BasicBlock block = blocks[blkIndex];
+ 
+                 LinkedListNode<INode> node = block.Operations.First;
+@@ -156,7 +144,7 @@ namespace Ryujinx.Graphics.Shader.Translation
+                     {
+                         for (int index = 0; index < operation.SourcesCount; index++)
+                         {
+-                            operation.SetSource(index, RenameLocal(operation.GetSource(index)));
++                            operation.SetSource(index, RenameLocal(localDefs, operation.GetSource(index)));
+                         }
+ 
+                         for (int index = 0; index < operation.DestsCount; index++)
+@@ -180,11 +168,11 @@ namespace Ryujinx.Graphics.Shader.Translation
+                 int localUses = localDefs.UseCount;
+                 for (int index = 0; index < localUses; index++)
+                 {
+-                    Operand local = localDefs.GetUse(index, out int key);
++                    localDefs.GetUse(index, out int key);
+ 
+                     Register reg = GetRegisterFromKey(key);
+ 
+-                    globalDefs[block.Index].TryAddOperand(reg, local);
++                    globalDefs[block.Index].TryAddOperand(reg, localDefs.Get(key));
+ 
+                     dfPhiBlocks.Enqueue(block);
+ 
+@@ -208,34 +196,13 @@ namespace Ryujinx.Graphics.Shader.Translation
+             {
+                 BasicBlock block = blocks[blkIndex];
+ 
+-                Operand RenameGlobal(Operand operand)
+-                {
+-                    if (operand != null && operand.Type == OperandType.Register)
+-                    {
+-                        int key = GetKeyFromRegister(operand.GetRegister());
+-
+-                        Operand local = localDefs.Get(key);
+-
+-                        if (local != null)
+-                        {
+-                            return local;
+-                        }
+-
+-                        operand = FindDefinitionForCurr(globalDefs, block, operand.GetRegister());
+-
+-                        localDefs.Add(key, operand);
+-                    }
+-
+-                    return operand;
+-                }
+-
+                 for (LinkedListNode<INode> node = block.Operations.First; node != null; node = node.Next)
+                 {
+                     if (node.Value is Operation operation)
+                     {
+                         for (int index = 0; index < operation.SourcesCount; index++)
+                         {
+-                            operation.SetSource(index, RenameGlobal(operation.GetSource(index)));
++                            operation.SetSource(index, RenameGlobal(globalDefs, localDefs, block, operation.GetSource(index)));
+                         }
+                     }
+                 }
+@@ -247,6 +214,39 @@ namespace Ryujinx.Graphics.Shader.Translation
+             }
+         }
+ 
++        private static Operand RenameLocal(LocalDefMap localDefs, Operand operand)
++        {
++            if (operand != null && operand.Type == OperandType.Register)
++            {
++                Operand local = localDefs.Get(GetKeyFromRegister(operand.GetRegister()));
++
++                operand = local ?? operand;
++            }
++
++            return operand;
++        }
++
++        private static Operand RenameGlobal(DefMap[] globalDefs, LocalDefMap localDefs, BasicBlock block, Operand operand)
++        {
++            if (operand != null && operand.Type == OperandType.Register)
++            {
++                int key = GetKeyFromRegister(operand.GetRegister());
++
++                Operand local = localDefs.Get(key);
++
++                if (local != null)
++                {
++                    return local;
++                }
++
++                operand = FindDefinitionForCurr(globalDefs, block, operand.GetRegister());
++
++                localDefs.Add(key, operand);
++            }
++
++            return operand;
++        }
++
+         private static Operand FindDefinitionForCurr(DefMap[] globalDefs, BasicBlock current, Register reg)
+         {
+             if (globalDefs[current.Index].HasPhi(reg))

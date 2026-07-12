@@ -21,7 +21,19 @@ export JNILIBS_DIR="$NATIVE_DEPS_DIR/../src/RyubingAndroid/app/src/main/jniLibs/
 # --- Locate the NDK ---
 : "${ANDROID_NDK_HOME:=${ANDROID_NDK_ROOT:-}}"
 if [[ -z "${ANDROID_NDK_HOME:-}" || ! -d "$ANDROID_NDK_HOME" ]]; then
-  echo "error: set ANDROID_NDK_HOME to your Android NDK (r26+)." >&2
+  REPO_ROOT="$(cd "$NATIVE_DEPS_DIR/.." && pwd)"
+  if toolchain_bin="$("$REPO_ROOT/scripts/resolve-ndk-toolchain.sh" 2>/dev/null)"; then
+    export ANDROID_NDK_HOME="$(cd "$toolchain_bin/../../../../.." && pwd)"
+  fi
+fi
+if [[ -z "${ANDROID_NDK_HOME:-}" || ! -d "$ANDROID_NDK_HOME" ]]; then
+  cat >&2 <<EOF
+error: Android NDK not found.
+
+Set ANDROID_NDK_HOME, or install the SDK/NDK locally:
+  scripts/setup-android-sdk.sh
+  export ANDROID_NDK_HOME="\$HOME/Android/Sdk/ndk/27.2.12479018"
+EOF
   exit 1
 fi
 

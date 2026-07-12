@@ -24,34 +24,56 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.ryubing.android.R
+import org.ryubing.android.data.DriverRepository
 
 /**
- * Custom Vulkan (Turnip) driver management. Imported .zip drivers are staged for the JNI
- * shim's adrenotools loader. The list always includes the built-in system driver.
+ * Custom Vulkan (Turnip) driver management. Imported .zip drivers are copied into app
+ * storage and the active selection is persisted across restarts.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DriverManagerScreen(onBack: () -> Unit) {
-    val systemDriver = stringResource(R.string.system_driver)
-    val drivers = remember { mutableStateListOf(systemDriver) }
-    var selected by remember { mutableStateOf(systemDriver) }
+fun DriverManagerScreen(
+    repository: DriverRepository,
+    onBack: () -> Unit,
+) {
+    val systemDriverLabel = stringResource(R.string.system_driver)
+    var drivers by remember(repository, systemDriverLabel) {
+        mutableStateOf(repository.loadDrivers(systemDriverLabel))
+    }
+    var selectedId by remember(repository) {
+        mutableStateOf(repository.loadSelectedId())
+    }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     val driverPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        // TODO: unpack the driver zip into app storage and hand its path to the JNI shim
-        //       via adrenotools when USE_ADRENOTOOLS is enabled. Tracked in docs.
-        if (uri != null) {
-            val name = uri.lastPathSegment?.substringAfterLast('/') ?: "Imported driver"
-            if (name !in drivers) drivers += name
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            statusMessage = null
+            try {
+                val imported = withContext(Dispatchers.IO) {
+                    repository.importDriver(uri)
+                }
+                drivers = repository.loadDrivers(systemDriverLabel)
+                selectedId = imported.id
+                repository.saveSelectedId(imported.id)
+                statusMessage = "Imported ${imported.displayName}"
+            } catch (e: Exception) {
+                statusMessage = "Import failed: ${e.message ?: "unknown error"}"
+            }
         }
     }
 
@@ -72,21 +94,39 @@ fun DriverManagerScreen(onBack: () -> Unit) {
             }
         },
     ) { padding ->
-        LazyColumn(
+        Column(
             Modifier.fillMaxSize().padding(padding).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(drivers) { driver ->
-                Card(Modifier.fillMaxWidth()) {
-                    androidx.compose.foundation.layout.Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .selectable(selected = driver == selected, onClick = { selected = driver })
-                            .padding(16.dp),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = driver == selected, onClick = { selected = driver })
-                        Text(driver, Modifier.padding(start = 12.dp))
+            statusMessage?.let { Text(it) }
+
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(drivers, key = { it.id }) { driver ->
+                    Card(Modifier.fillMaxWidth()) {
+                        androidx.compose.foundation.layout.Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = driver.id == selectedId,
+                                    onClick = {
+                                        selectedId = driver.id
+                                        repository.saveSelectedId(driver.id)
+                                    },
+                                )
+                                .padding(16.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = driver.id == selectedId,
+                                onClick = {
+                                    selectedId = driver.id
+                                    repository.saveSelectedId(driver.id)
+                                },
+                            )
+                            Text(driver.displayName, Modifier.padding(start = 12.dp))
+                        }
                     }
                 }
             }

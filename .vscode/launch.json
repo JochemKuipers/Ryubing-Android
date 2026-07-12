@@ -32,9 +32,8 @@
             "name": "Android: Run (deploy + logcat)",
             "type": "node-terminal",
             "request": "launch",
-            "command": "${workspaceFolder}/scripts/android-deploy.sh logcat",
-            "cwd": "${workspaceFolder}",
-            "preLaunchTask": "android: deploy"
+            "command": "${workspaceFolder}/scripts/android-deploy.sh deploy-logcat",
+            "cwd": "${workspaceFolder}"
         },
         {
             "name": "Android: Logcat",

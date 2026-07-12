@@ -1,11 +1,6 @@
-// libryubingjni.so — Android platform shim for the Ryubing emulator core.
-//
-// This is deliberately small: it owns the ANativeWindow behind the Compose
-// SurfaceView and creates the VkSurfaceKHR the managed renderer draws into. The
-// surface factory is handed to libryubing.so as a plain function pointer so the
-// NativeAOT image never needs to touch JNI.
-
+#include <dlfcn.h>
 #include <jni.h>
+#include <cstring>
 #include <android/log.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
@@ -13,16 +8,58 @@
 
 #include "ryubing_interop.h"
 
+#ifdef RYUBING_USE_ADRENOTOOLS
+#include "adrenotools/driver.h"
+#endif
+
 #define LOG_TAG "RyubingJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 namespace {
-    JavaVM *g_vm = nullptr;
-    ANativeWindow *g_window = nullptr;
+JavaVM *g_vm = nullptr;
+ANativeWindow *g_window = nullptr;
+void *g_vulkan_driver = nullptr;
+int g_surface_rotation = 0;
+
+using SetBuffersTransformFn = int32_t (*)(ANativeWindow *, int32_t);
+
+SetBuffersTransformFn GetSetBuffersTransformFn() {
+    static SetBuffersTransformFn fn = reinterpret_cast<SetBuffersTransformFn>(
+        dlsym(RTLD_DEFAULT, "ANativeWindow_setBuffersTransform"));
+    return fn;
 }
 
-// Surface factory passed to libryubing.so. Signature matches RyubingCreateSurfaceFn.
+void ApplyNativeWindowTransform(ANativeWindow *window, int /*androidRotation*/) {
+    if (window == nullptr) {
+        return;
+    }
+
+    SetBuffersTransformFn setTransform = GetSetBuffersTransformFn();
+    if (setTransform == nullptr) {
+        return;
+    }
+
+    // Vulkan already honors SurfaceCapabilities.CurrentTransform via swapchain
+    // preTransform. Applying a matching buffer rotation here double-rotates output.
+    setTransform(window, ANATIVEWINDOW_TRANSFORM_IDENTITY);
+}
+} // namespace
+
+static char *GetStringUtf8(JNIEnv *env, jstring value) {
+    if (value == nullptr) {
+        return nullptr;
+    }
+    const char *utf = env->GetStringUTFChars(value, nullptr);
+    if (utf == nullptr) {
+        return nullptr;
+    }
+    auto *copy = new char[strlen(utf) + 1];
+    strcpy(copy, utf);
+    env->ReleaseStringUTFChars(value, utf);
+    return copy;
+}
+
 extern "C" uint64_t ryubingjni_create_surface(void *instanceHandle) {
     if (g_window == nullptr) {
         LOGE("create_surface called with no ANativeWindow set");
@@ -52,7 +89,6 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
 
 extern "C" {
 
-// Called from Kotlin when the SurfaceView surface is created/changed.
 JNIEXPORT void JNICALL
 Java_org_ryubing_android_RyubingNative_setSurface(JNIEnv *env, jclass, jobject surface) {
     if (g_window != nullptr) {
@@ -62,18 +98,79 @@ Java_org_ryubing_android_RyubingNative_setSurface(JNIEnv *env, jclass, jobject s
 
     if (surface != nullptr) {
         g_window = ANativeWindow_fromSurface(env, surface);
+        ApplyNativeWindowTransform(g_window, g_surface_rotation);
         LOGI("ANativeWindow acquired: %p", g_window);
     } else {
         LOGI("Surface cleared");
     }
 }
 
-// Registers this shim's surface factory with the managed core. Call after both
-// libraries are loaded and before ryubing_load_application.
+JNIEXPORT void JNICALL
+Java_org_ryubing_android_RyubingNative_setSurfaceRotation(JNIEnv *, jclass, jint rotation) {
+    g_surface_rotation = rotation;
+    if (g_window != nullptr) {
+        ApplyNativeWindowTransform(g_window, g_surface_rotation);
+    }
+}
+
 JNIEXPORT void JNICALL
 Java_org_ryubing_android_RyubingNative_registerSurfaceProvider(JNIEnv *, jclass) {
     ryubing_set_surface_provider(&ryubingjni_create_surface);
     LOGI("Surface provider registered with libryubing");
+}
+
+JNIEXPORT jlong JNICALL
+Java_org_ryubing_android_RyubingNative_loadVulkanDriver(
+        JNIEnv *env,
+        jclass,
+        jstring hook_lib_dir,
+        jstring custom_driver_dir,
+        jstring custom_driver_name) {
+#ifndef RYUBING_USE_ADRENOTOOLS
+    LOGE("loadVulkanDriver called but adrenotools support was not compiled in");
+    return 0;
+#else
+    if (g_vulkan_driver != nullptr) {
+        dlclose(g_vulkan_driver);
+        g_vulkan_driver = nullptr;
+    }
+
+    char *hookLibDir = GetStringUtf8(env, hook_lib_dir);
+    char *customDriverDir = GetStringUtf8(env, custom_driver_dir);
+    char *customDriverName = GetStringUtf8(env, custom_driver_name);
+
+    if (hookLibDir == nullptr || customDriverDir == nullptr || customDriverName == nullptr) {
+        delete[] hookLibDir;
+        delete[] customDriverDir;
+        delete[] customDriverName;
+        LOGE("loadVulkanDriver received null path argument");
+        return 0;
+    }
+
+    LOGI("Loading custom Vulkan driver '%s' from '%s' (hooks in '%s')",
+         customDriverName, customDriverDir, hookLibDir);
+
+    g_vulkan_driver = adrenotools_open_libvulkan(
+            RTLD_NOW,
+            ADRENOTOOLS_DRIVER_CUSTOM,
+            nullptr,
+            hookLibDir,
+            customDriverDir,
+            customDriverName,
+            nullptr,
+            nullptr);
+
+    delete[] hookLibDir;
+    delete[] customDriverDir;
+    delete[] customDriverName;
+
+    if (g_vulkan_driver == nullptr) {
+        LOGE("adrenotools_open_libvulkan failed");
+        return 0;
+    }
+
+    return reinterpret_cast<jlong>(g_vulkan_driver);
+#endif
 }
 
 } // extern "C"

@@ -1,22 +1,17 @@
-# Native C++ submodules
+# Native C++ dependencies
 
-Optional native dependencies for the JNI shim live here as git submodules:
+adrenotools is fetched automatically at build time (see `CMakeLists.txt`) to inject
+custom Turnip Vulkan drivers on Adreno GPUs.
 
-- `libadrenotools/` — custom Vulkan (Turnip) driver loading on Adreno GPUs.
-  Enable in the build with:
+The JNI shim calls `adrenotools_open_libvulkan` when a persisted driver is selected;
+`libryubing.so` receives the resulting handle via `ryubing_set_vulkan_driver`.
 
-  ```
-  -DUSE_ADRENOTOOLS=ON -DADRENOTOOLS_DIR=$PWD/libraries/libadrenotools
-  ```
+**Requirement:** `useLegacyPackaging = true` for jniLibs (already set in
+`app/build.gradle.kts`) — adrenotools hooks must live in `nativeLibraryDir`.
 
-  (wire these into `externalNativeBuild.cmake.arguments` in `app/build.gradle.kts`).
-
-Add with, for example:
+Optional submodule checkout (if you prefer a local tree over FetchContent):
 
 ```bash
 git submodule add https://github.com/bylaws/libadrenotools \
     src/RyubingAndroid/app/src/main/cpp/libraries/libadrenotools
 ```
-
-The shim builds and runs without these (system Vulkan loader only); they are needed
-for custom driver injection on devices where the stock driver underperforms.

@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.GameEntry
 import org.ryubing.android.data.GameRepository
 import org.ryubing.android.data.SettingsRepository
@@ -22,6 +23,7 @@ sealed interface Screen {
 fun RyubingApp(
     gameRepository: GameRepository,
     settingsRepository: SettingsRepository,
+    driverRepository: DriverRepository,
     session: EmulationSession,
 ) {
     var screen: Screen by remember { mutableStateOf(Screen.Library) }
@@ -41,6 +43,7 @@ fun RyubingApp(
         )
 
         is Screen.Drivers -> DriverManagerScreen(
+            repository = driverRepository,
             onBack = { screen = Screen.Library },
         )
 

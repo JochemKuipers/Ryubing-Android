@@ -69,6 +69,15 @@ namespace LibRyubing
             _settings.BackendThreading = (Ryujinx.Common.Configuration.BackendThreading)backendThreading;
         }
 
+        /// <summary>
+        /// libvulkan handle from adrenotools (via JNI). Zero selects the system loader.
+        /// </summary>
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_set_vulkan_driver")]
+        public static void SetVulkanDriver(long driverHandle)
+        {
+            AndroidHost.SetVulkanDriver((nint)driverHandle);
+        }
+
         [UnmanagedCallersOnly(EntryPoint = "ryubing_load_application")]
         public static int LoadApplication(byte* path, byte* displayName)
         {
@@ -115,6 +124,12 @@ namespace LibRyubing
         {
             AndroidHost.GamepadDriver?.GetAndroidGamepad(AndroidGamepadDriver.PrimaryGamepadId)?
                 .SetMotion(new System.Numerics.Vector3(ax, ay, az), new System.Numerics.Vector3(gx, gy, gz));
+        }
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_set_window_size")]
+        public static void SetWindowSize(int width, int height)
+        {
+            AndroidHost.SetWindowSize(width, height);
         }
 
         // --- Lifecycle teardown ---

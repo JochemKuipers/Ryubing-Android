@@ -47,6 +47,7 @@ namespace LibRyubing
         private static Switch _device;
         private static Thread _gpuThread;
         private static CancellationTokenSource _gpuCancellation;
+        private static VulkanLoader _vulkanLoader;
 
         private static volatile bool _isActive;
         private static volatile bool _isStopped;
@@ -54,6 +55,16 @@ namespace LibRyubing
         public static Switch Device => _device;
         public static AndroidGamepadDriver GamepadDriver => _gamepadDriver;
         public static bool IsRunning => _isActive && !_isStopped;
+
+        /// <summary>
+        /// Registers a libvulkan.so handle from adrenotools. Pass zero to use the system loader.
+        /// Must be called before the first <see cref="LoadApplication"/>.
+        /// </summary>
+        public static void SetVulkanDriver(nint driverHandle)
+        {
+            _vulkanLoader?.Dispose();
+            _vulkanLoader = driverHandle != nint.Zero ? new VulkanLoader(driverHandle) : null;
+        }
 
         /// <summary>
         /// One-time process initialization. <paramref name="appDataPath"/> is the app's
@@ -201,7 +212,7 @@ namespace LibRyubing
 
         private static IRenderer CreateVulkanRenderer(EmulatorSettings settings)
         {
-            Vk api = Vk.GetApi();
+            Vk api = _vulkanLoader?.GetApi() ?? Vk.GetApi();
 
             return new VulkanRenderer(
                 api,
@@ -376,6 +387,18 @@ namespace LibRyubing
             _gpuCancellation?.Cancel();
         }
 
+        /// <summary>
+        /// Notifies the Vulkan backend that the Android surface changed size. Marks the
+        /// swapchain dirty so the next present recreates it from the ANativeWindow extent.
+        /// </summary>
+        public static void SetWindowSize(int width, int height)
+        {
+            if (_device?.Gpu?.Renderer is VulkanRenderer vulkan && vulkan.Window != null)
+            {
+                vulkan.Window.SetSize(width, height);
+            }
+        }
+
         /// <summary>Stops emulation and disposes the current device. Blocks until the GPU thread exits.</summary>
         public static void Stop()
         {
@@ -391,6 +414,8 @@ namespace LibRyubing
         public static void Shutdown()
         {
             Stop();
+            _vulkanLoader?.Dispose();
+            _vulkanLoader = null;
             _inputManager?.Dispose();
             _virtualFileSystem?.Dispose();
         }

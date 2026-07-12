@@ -13,7 +13,17 @@ shared objects into `src/RyubingAndroid/app/src/main/jniLibs/arm64-v8a/`.
 ## Usage
 
 ```bash
-export ANDROID_NDK_HOME=/path/to/android-ndk-r27
+./build-all.sh
+```
+
+If `ANDROID_NDK_HOME` is unset, the scripts auto-detect the NDK from
+`src/RyubingAndroid/local.properties`, `ANDROID_HOME`, or `~/Android/Sdk`
+(the layout created by `scripts/setup-android-sdk.sh`).
+
+Override explicitly when needed:
+
+```bash
+export ANDROID_NDK_HOME="$HOME/Android/Sdk/ndk/27.2.12479018"
 ./build-all.sh
 ```
 

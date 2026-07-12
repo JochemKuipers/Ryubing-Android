@@ -66,7 +66,8 @@ android {
     // Do not let AGP strip them (libryubing.so is already stripped by the publish).
     packaging {
         jniLibs {
-            useLegacyPackaging = false
+            // adrenotools hooks install into nativeLibraryDir; compressed APK libs break hook paths.
+            useLegacyPackaging = true
             keepDebugSymbols += "**/*.so"
         }
     }

@@ -45,12 +45,16 @@ Name format: `NNNN-short-description.patch` (kept in order by `NNNN`).
 
 ## Current queue
 
-Three patches ported from [Kenji-NX `libryujinx_bionic`](https://git.ryujinx.app/projects/Kenji-NX/src/branch/libryujinx_bionic) onto the Ryubing pin (`dc06d0de` / Canary-1.3.335). The phantom upstream commits cited in older pins never landed on Ryubing master.
+Seven patches ported from [Kenji-NX `libryujinx_bionic`](https://git.ryujinx.app/projects/Kenji-NX/src/branch/libryujinx_bionic) onto the Ryubing pin (`dc06d0de` / Canary-1.3.335). The phantom upstream commits cited in older pins never landed on Ryubing master. Patches 0006–0007 are Ryubing-native (NativeAOT shader SSA crash).
 
 | Patch | Concern |
 |-------|---------|
 | `0001-android-route-bionic-memory-through-Unix-helpers-and.patch` | `PlatformInfo.IsBionic`, Unix memory routing, `ASharedMemory_create` shared memory |
 | `0002-android-host-no-mirror-address-space-fallback-on-bio.patch` | `TryCreateWithoutMirror`, `MemoryManagerHostNoMirror`, `ArmProcessContextFactory` fallback |
 | `0003-android-disable-sparse-JIT-tables-and-honor-bionic-i.patch` | Sparse JIT off on bionic, `PreciseSleepHelper` bionic path |
+| `0004-android-armeilleure-delegate-registry-for-NativeAOT.patch` | NativeAOT-safe JIT helper delegate registry (`Delegates.cs`, helper `#if ANDROID` guards) |
+| `0005-android-bionic-sigaction-layout-and-signal-handler.patch` | Bionic `sigaction` struct layout, siginfo offsets, alternate stack helpers |
+| `0006-android-hoist-ssa-rename-local-functions-for-NativeAOT.patch` | Hoist `Ssa.Rename` nested locals to static methods (NativeAOT codegen fix) |
+| `0007-android-add-SSA-bounds-checks-and-skip-zero-predicat.patch` | Bounds-check `LocalDefMap` keys; skip RZ/PT dest registers (NativeAOT AV fix) |
 
 `LibRyubing` still sets `PlatformInfo.IsBionic = true` at init (adapter layer).

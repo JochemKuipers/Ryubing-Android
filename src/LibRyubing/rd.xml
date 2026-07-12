@@ -20,7 +20,11 @@
     <!-- GPU shader translation + GAL enums are used from generated/serialized code. -->
     <Assembly Name="Ryujinx.Graphics.Gpu" Dynamic="Required All" />
     <Assembly Name="Ryujinx.Graphics.GAL" />
-    <Assembly Name="Ryujinx.Graphics.Shader" />
+    <Assembly Name="Ryujinx.Graphics.Shader" Dynamic="Required All" />
+
+    <!-- AOT/trimming: dynamic binder and expression trees (used by HLE/GPU reflection paths). -->
+    <Assembly Name="Microsoft.CSharp" Dynamic="Required All" />
+    <Assembly Name="System.Linq.Expressions" Dynamic="Required All" />
 
     <!-- CPU translation cache + native interface. -->
     <Assembly Name="ARMeilleure" Dynamic="Required All" />

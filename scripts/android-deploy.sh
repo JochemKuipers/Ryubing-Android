@@ -22,6 +22,7 @@ Build / deploy:
   install            Install the debug APK on the connected device
   launch             Start MainActivity
   deploy             build + install + launch
+  deploy-logcat      deploy, then stream logcat until Ctrl+C
   debug              build + install + wait for JDWP debugger on :8700 (needs Java debugger)
   resume             Relaunch without waiting for debugger (unstick "Waiting for debugger")
   logcat             Stream app logs (Ctrl+C to stop)
@@ -118,7 +119,7 @@ ensure_native_deps() {
     done
     if ((${#missing[@]} > 0)); then
         echo "Missing native runtime libs: ${missing[*]}" >&2
-        echo "Build them with: cd native-deps && ANDROID_NDK_HOME=\$ANDROID_HOME/ndk/<version> ./build-all.sh" >&2
+        echo "Build them with: cd native-deps && ./build-all.sh" >&2
         exit 1
     fi
 }
@@ -214,10 +215,16 @@ cmd_deploy() {
     cmd_launch
 }
 
+cmd_deploy_logcat() {
+    cmd_deploy
+    cmd_logcat
+}
+
 cmd_logcat() {
     require_device
     adb logcat --clear >/dev/null 2>&1 || true
-    adb logcat -v time EmulationSession:D Ryubing:D *:S
+    # Include Zygote/ActivityManager so native SIGSEGV exits are visible (filtered Ryubing tag alone misses them).
+    adb logcat -v time Ryubing:D EmulationSession:D ActivityManager:I Zygote:I DEBUG:F AndroidRuntime:E '*:S'
 }
 
 cmd_devices() {
@@ -327,6 +334,7 @@ main() {
         install) cmd_install ;;
         launch) cmd_launch ;;
         deploy) cmd_deploy ;;
+        deploy-logcat) cmd_deploy_logcat ;;
         debug) cmd_debug ;;
         resume) cmd_resume ;;
         logcat) cmd_logcat ;;
