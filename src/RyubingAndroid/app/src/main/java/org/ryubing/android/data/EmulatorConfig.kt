@@ -58,6 +58,8 @@ data class EmulatorConfig(
     val showTouchRightStick: Boolean = true,
     val touchInvertStickY: Boolean = false,
     val enableMotion: Boolean = true,
+    /** Multiplier applied to device gyro/accel fed to the guest (0.25–2). */
+    val motionSensitivity: Float = 1f,
     /** SAF tree URI for auto-discovered updates/DLC folders. */
     val updatesFolderUri: String = "",
 )

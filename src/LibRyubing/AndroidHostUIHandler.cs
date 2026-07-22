@@ -75,7 +75,7 @@ namespace LibRyubing
         public void ExecuteProgram(Switch device, ProgramSpecifyKind kind, ulong value)
         {
             device.Configuration.UserChannelPersistence.ExecuteProgram(kind, value);
-            AndroidHost.RequestStop();
+            AndroidHost.ScheduleProgramRelaunch();
         }
 
         public bool DisplayErrorAppletDialog(string title, string message, string[] buttonsText, (uint Module, uint Description)? errorCode = null)

@@ -1,6 +1,7 @@
 package org.ryubing.android
 
 import android.os.Bundle
+import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
@@ -13,6 +14,7 @@ import org.ryubing.android.data.GameRepository
 import org.ryubing.android.data.SettingsRepository
 import org.ryubing.android.emu.EmulationSession
 import org.ryubing.android.input.ControllerKeyCapture
+import org.ryubing.android.input.DpadInputMode
 import org.ryubing.android.input.PhysicalGamepadController
 import org.ryubing.android.ui.RyubingApp
 import org.ryubing.android.ui.theme.RyubingTheme
@@ -24,6 +26,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var mappingRepository: ControllerMappingRepository
     private lateinit var hotkeyRepository: GamepadHotkeyRepository
     private var physicalGamepad: PhysicalGamepadController? = null
+    private var dpadInputMode: DpadInputMode = DpadInputMode.HatAxes
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,6 +64,7 @@ class MainActivity : ComponentActivity() {
     fun refreshPhysicalGamepad() {
         val mapping = mappingRepository.load()
         val hotkeys = hotkeyRepository.load()
+        dpadInputMode = mapping.dpadInputMode
         val existing = physicalGamepad
         if (existing != null) {
             existing.updateMapping(mapping)
@@ -77,7 +81,21 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchGenericMotionEvent(event: MotionEvent?): Boolean {
-        event?.let { physicalGamepad?.onMotionEvent(it) }
+        if (event != null) {
+            physicalGamepad?.onMotionEvent(event)
+            val sources = event.source
+            val isPadMotion =
+                sources and (InputDevice.SOURCE_JOYSTICK or InputDevice.SOURCE_GAMEPAD) != 0
+            // Hat-axes mode: consume motion so Android does not also synthesize
+            // FLAG_FALLBACK DPAD keys. Legacy mode (and remap capture) leave motion
+            // unconsumed so KEYCODE_DPAD_* can reach the configurator / gameplay.
+            if (isPadMotion &&
+                dpadInputMode == DpadInputMode.HatAxes &&
+                !ControllerKeyCapture.isActive
+            ) {
+                return true
+            }
+        }
         return super.dispatchGenericMotionEvent(event)
     }
 }

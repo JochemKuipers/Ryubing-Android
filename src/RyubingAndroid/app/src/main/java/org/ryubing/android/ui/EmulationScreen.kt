@@ -103,7 +103,11 @@ fun EmulationScreen(
         }
 
         val motion = if (config.enableMotion) {
-            MotionSensorManager(context, session::setMotion).also { it.register() }
+            MotionSensorManager(
+                context,
+                session::setMotion,
+                sensitivity = config.motionSensitivity,
+            ).also { it.register() }
         } else {
             null
         }

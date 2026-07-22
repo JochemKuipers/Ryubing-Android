@@ -39,7 +39,19 @@ class PhysicalGamepadController(
 
     fun onKeyEvent(event: KeyEvent): Boolean {
         if (ControllerKeyCapture.isActive) return false
-        if ((event.flags and KeyEvent.FLAG_FALLBACK) != 0) return false
+
+        val isDpadKey = event.keyCode in DPAD_KEYS
+        val m = mappingHolder
+
+        // Hat mode: D-pad comes from AXIS_HAT_* only — ignore DPAD keycodes (incl. FALLBACK).
+        if (m.dpadInputMode == DpadInputMode.HatAxes && isDpadKey) return false
+
+        // Legacy mode: accept FALLBACK DPAD keys synthesized from hat axes.
+        // Other FALLBACK keys are still ignored to avoid double-fires.
+        val isFallback = (event.flags and KeyEvent.FLAG_FALLBACK) != 0
+        if (isFallback && !(m.dpadInputMode == DpadInputMode.LegacyKeys && isDpadKey)) {
+            return false
+        }
 
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
@@ -133,7 +145,9 @@ class PhysicalGamepadController(
         updateTrigger(lt, true)
         updateTrigger(rt, false)
 
-        device?.let { updateDpadHat(event, it, m) }
+        if (m.dpadInputMode == DpadInputMode.HatAxes) {
+            device?.let { updateDpadHat(event, it) }
+        }
     }
 
     private fun updateTrigger(value: Float, left: Boolean) {
@@ -151,20 +165,29 @@ class PhysicalGamepadController(
         }
     }
 
-    private fun updateDpadHat(event: MotionEvent, device: InputDevice, m: ControllerMapping) {
-        if (device.sources and InputDevice.SOURCE_DPAD != 0) return
+    private fun updateDpadHat(event: MotionEvent, device: InputDevice) {
+        val hasHat = device.getMotionRange(MotionEvent.AXIS_HAT_X, InputDevice.SOURCE_JOYSTICK) != null ||
+            device.getMotionRange(MotionEvent.AXIS_HAT_Y, InputDevice.SOURCE_JOYSTICK) != null ||
+            device.getMotionRange(MotionEvent.AXIS_HAT_X) != null ||
+            device.getMotionRange(MotionEvent.AXIS_HAT_Y) != null
+        if (!hasHat) return
 
         val hor = event.getAxisValue(MotionEvent.AXIS_HAT_X)
         val vert = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
-
-        m.keyFor(SwitchButton.DpadUp)?.let { session.setButton(SwitchButton.DpadUp, vert < 0f) }
-        m.keyFor(SwitchButton.DpadDown)?.let { session.setButton(SwitchButton.DpadDown, vert > 0f) }
-        m.keyFor(SwitchButton.DpadLeft)?.let { session.setButton(SwitchButton.DpadLeft, hor < 0f) }
-        m.keyFor(SwitchButton.DpadRight)?.let { session.setButton(SwitchButton.DpadRight, hor > 0f) }
+        session.setButton(SwitchButton.DpadUp, vert < -0.5f)
+        session.setButton(SwitchButton.DpadDown, vert > 0.5f)
+        session.setButton(SwitchButton.DpadLeft, hor < -0.5f)
+        session.setButton(SwitchButton.DpadRight, hor > 0.5f)
     }
 
     private companion object {
         const val PRESS_THRESHOLD = 0.65f
         const val RELEASE_THRESHOLD = 0.45f
+        val DPAD_KEYS = setOf(
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+        )
     }
 }

@@ -453,6 +453,14 @@ private fun InputSettingsPage(
     SwitchRow("Motion sensor", config.enableMotion) {
         update(config.copy(enableMotion = it))
     }
+    if (config.enableMotion) {
+        SliderRow(
+            label = "Motion sensitivity: ${"%.2f".format(config.motionSensitivity)}",
+            value = config.motionSensitivity,
+            range = 0.25f..2f,
+            onChange = { update(config.copy(motionSensitivity = it)) },
+        )
+    }
 }
 
 @Composable

@@ -31,6 +31,7 @@ import org.ryubing.android.input.AndroidKeyLabels
 import org.ryubing.android.input.ControllerKeyCapture
 import org.ryubing.android.input.ControllerLayoutPreset
 import org.ryubing.android.input.ControllerMapping
+import org.ryubing.android.input.DpadInputMode
 import org.ryubing.android.input.REMAPPABLE_SWITCH_BUTTONS
 import org.ryubing.android.input.SwitchButton
 import org.ryubing.android.input.displayLabel
@@ -116,9 +117,35 @@ fun ControllerRemapPanel(
         }
 
         HorizontalDivider()
+        Text("D-pad", style = MaterialTheme.typography.titleSmall)
+        RemapSwitchRow(
+            label = "Use hat axes (AXIS_HAT)",
+            checked = mapping.dpadInputMode == DpadInputMode.HatAxes,
+            onChange = { useHat ->
+                persist(
+                    mapping.copy(
+                        dpadInputMode = if (useHat) DpadInputMode.HatAxes else DpadInputMode.LegacyKeys,
+                    ),
+                )
+            },
+        )
+        Text(
+            if (mapping.dpadInputMode == DpadInputMode.HatAxes) {
+                "D-pad reads AXIS_HAT_X / AXIS_HAT_Y directly (recommended for most controllers)."
+            } else {
+                "Legacy mode: bind KEYCODE_DPAD_* below. Needed for pads that only send D-pad keys."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        val faceButtons = REMAPPABLE_SWITCH_BUTTONS.filter { it !in DPAD_SWITCH_BUTTONS }
+        val dpadButtons = REMAPPABLE_SWITCH_BUTTONS.filter { it in DPAD_SWITCH_BUTTONS }
+
+        HorizontalDivider()
         Text("Face & shoulder buttons", style = MaterialTheme.typography.titleSmall)
 
-        REMAPPABLE_SWITCH_BUTTONS.forEach { button ->
+        faceButtons.forEach { button ->
             MappingRow(
                 switchLabel = button.displayLabel(),
                 boundKeyLabel = mapping.keyFor(button)?.let(AndroidKeyLabels::label) ?: "Unassigned",
@@ -130,6 +157,38 @@ fun ControllerRemapPanel(
                     persist(mapping.withoutBinding(button))
                 },
             )
+        }
+
+        if (mapping.dpadInputMode == DpadInputMode.LegacyKeys) {
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            Text("D-pad buttons (legacy)", style = MaterialTheme.typography.titleSmall)
+            dpadButtons.forEach { button ->
+                MappingRow(
+                    switchLabel = button.displayLabel(),
+                    boundKeyLabel = mapping.keyFor(button)?.let(AndroidKeyLabels::label) ?: "Unassigned",
+                    isListening = listeningFor == button,
+                    onBind = { startListening(button) },
+                    onClear = {
+                        ControllerKeyCapture.cancel()
+                        listeningFor = null
+                        persist(mapping.withoutBinding(button))
+                    },
+                )
+            }
+        } else {
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            Text("D-pad (hat axes)", style = MaterialTheme.typography.titleSmall)
+            dpadButtons.forEach { button ->
+                MappingRow(
+                    switchLabel = button.displayLabel(),
+                    boundKeyLabel = "Hat axes",
+                    isListening = false,
+                    bindEnabled = false,
+                    onBind = {},
+                    onClear = {},
+                    clearEnabled = false,
+                )
+            }
         }
 
         HorizontalDivider(Modifier.padding(vertical = 4.dp))
@@ -147,6 +206,13 @@ fun ControllerRemapPanel(
     }
 }
 
+private val DPAD_SWITCH_BUTTONS = setOf(
+    SwitchButton.DpadUp,
+    SwitchButton.DpadDown,
+    SwitchButton.DpadLeft,
+    SwitchButton.DpadRight,
+)
+
 @Composable
 private fun MappingRow(
     switchLabel: String,
@@ -154,11 +220,13 @@ private fun MappingRow(
     isListening: Boolean,
     onBind: () -> Unit,
     onClear: () -> Unit,
+    bindEnabled: Boolean = true,
+    clearEnabled: Boolean = true,
 ) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onBind)
+            .then(if (bindEnabled) Modifier.clickable(onClick = onBind) else Modifier)
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -174,8 +242,10 @@ private fun MappingRow(
                 },
             )
         }
-        IconButton(onClick = onClear) {
-            Icon(Icons.Default.Clear, contentDescription = "Clear binding")
+        if (clearEnabled) {
+            IconButton(onClick = onClear) {
+                Icon(Icons.Default.Clear, contentDescription = "Clear binding")
+            }
         }
     }
 }

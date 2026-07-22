@@ -1,11 +1,21 @@
 package org.ryubing.android.input
 
 import android.view.KeyEvent
-import org.ryubing.android.input.SwitchButton
+
+/** How physical D-pad input is read from the controller. */
+enum class DpadInputMode {
+    /** AXIS_HAT_X / AXIS_HAT_Y (default — most Bluetooth pads). */
+    HatAxes,
+
+    /** KEYCODE_DPAD_* key events (legacy / some handhelds). */
+    LegacyKeys,
+}
+
 data class ControllerMapping(
     val bindings: Map<SwitchButton, Int> = emptyMap(),
     val invertLeftStickY: Boolean = true,
     val invertRightStickY: Boolean = true,
+    val dpadInputMode: DpadInputMode = DpadInputMode.HatAxes,
 ) {
     fun keyFor(button: SwitchButton): Int? = bindings[button]?.takeIf { it != KeyEvent.KEYCODE_UNKNOWN }
 

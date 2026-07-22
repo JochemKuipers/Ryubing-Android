@@ -1,6 +1,7 @@
 using Ryujinx.Common.Logging;
 using Silk.NET.Vulkan;
 using System;
+using System.Threading;
 
 namespace LibRyubing
 {
@@ -43,6 +44,13 @@ namespace LibRyubing
             }
 
             ulong handle = _createSurface(instance.Handle);
+
+            // Relaunch can race the ANativeWindow briefly; retry once after a short wait.
+            if (handle == 0)
+            {
+                Thread.Sleep(50);
+                handle = _createSurface(instance.Handle);
+            }
 
             if (handle == 0)
             {

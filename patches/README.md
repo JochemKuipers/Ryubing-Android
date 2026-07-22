@@ -58,5 +58,6 @@ Seven patches ported from [Kenji-NX `libryujinx_bionic`](https://git.ryujinx.app
 | `0007-android-add-SSA-bounds-checks-and-skip-zero-predicat.patch` | Bounds-check `LocalDefMap` keys; skip RZ/PT dest registers (NativeAOT AV fix) |
 | `0008-android-vulkan-identity-pretransform-and-surface.patch` | Identity swapchain preTransform on bionic; expose `CurrentTransform` for JNI buffer sync |
 | `0009-android-vulkan-recover-from-surface-lost.patch` | Treat `ErrorSurfaceLostKhr` like out-of-date; skip 0×0 swapchain extents on Android |
+| `0010-hle-browser-applet-lasturl-for-web-offline.patch` | Web/Offline browser stubs return `LastUrl` (stops LibAppletOff recreate loops) |
 
 `LibRyubing` still sets `PlatformInfo.IsBionic = true` at init (adapter layer).

@@ -51,6 +51,7 @@ class SettingsRepository(context: Context) {
         showTouchRightStick = prefs.getBoolean(KEY_TOUCH_RIGHT_STICK, true),
         touchInvertStickY = prefs.getBoolean(KEY_TOUCH_INVERT_STICK_Y, false),
         enableMotion = prefs.getBoolean(KEY_ENABLE_MOTION, true),
+        motionSensitivity = prefs.getFloat(KEY_MOTION_SENS, 1f).coerceIn(0.25f, 2f),
         updatesFolderUri = prefs.getString(KEY_UPDATES_FOLDER_URI, "") ?: "",
     )
 
@@ -94,6 +95,7 @@ class SettingsRepository(context: Context) {
         putBoolean(KEY_TOUCH_RIGHT_STICK, config.showTouchRightStick)
         putBoolean(KEY_TOUCH_INVERT_STICK_Y, config.touchInvertStickY)
         putBoolean(KEY_ENABLE_MOTION, config.enableMotion)
+        putFloat(KEY_MOTION_SENS, config.motionSensitivity)
         putString(KEY_UPDATES_FOLDER_URI, config.updatesFolderUri)
     }
 
@@ -137,6 +139,7 @@ class SettingsRepository(context: Context) {
         const val KEY_TOUCH_RIGHT_STICK = "touch_right_stick"
         const val KEY_TOUCH_INVERT_STICK_Y = "touch_invert_stick_y"
         const val KEY_ENABLE_MOTION = "enable_motion"
+        const val KEY_MOTION_SENS = "motion_sens"
         const val KEY_UPDATES_FOLDER_URI = "updates_folder_uri"
     }
 }

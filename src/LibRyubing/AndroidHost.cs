@@ -55,6 +55,7 @@ namespace LibRyubing
         private static Switch _device;
         private static Thread _gpuThread;
         private static CancellationTokenSource _gpuCancellation;
+        private static ManualResetEventSlim _gpuFrameLoopDone;
         private static VulkanLoader _vulkanLoader;
         private static readonly object LifecycleLock = new();
 
@@ -64,6 +65,12 @@ namespace LibRyubing
         private static readonly object _screenshotLock = new();
         private static float _volumeBeforeMute = 1f;
         private static bool _emulationPaused;
+
+        // Remembered so ExecuteProgram can reload the same container with a new program index.
+        private static string _lastApplicationPath;
+        private static string _lastApplicationDisplayName;
+        private static EmulatorSettings _lastApplicationSettings;
+        private static volatile bool _programRelaunchInProgress;
 
         public static Switch Device => _device;
         public static AndroidGamepadDriver GamepadDriver => _gamepadDriver;
@@ -252,6 +259,11 @@ namespace LibRyubing
             _npadManager?.Dispose();
             _npadManager = _inputManager.CreateNpadManager();
             _npadManager.Initialize(_device, AndroidInputDefaults.CreateDefaultConfigs(), enableKeyboard: false, enableMouse: false);
+
+            _lastApplicationPath = path;
+            _lastApplicationDisplayName = displayName;
+            _lastApplicationSettings = settings;
+
             StartGpuLoop();
             return true;
         }
@@ -363,6 +375,8 @@ namespace LibRyubing
         private static void StartGpuLoop()
         {
             _gpuCancellation = new CancellationTokenSource();
+            _gpuFrameLoopDone?.Dispose();
+            _gpuFrameLoopDone = new ManualResetEventSlim(false);
             _isActive = true;
             _isStopped = false;
 
@@ -372,6 +386,10 @@ namespace LibRyubing
 
         // Mirrors WindowBase.Render(): drive the GPU FIFO and present frames. Presentation
         // targets the Vulkan swapchain bound to the Android surface, so SwapBuffers is a no-op.
+        //
+        // With BackendThreading, RunLoop blocks this thread in ThreadedRenderer.RenderLoop until
+        // the renderer is disposed. The inner callback runs on GPU.MainThread and must signal
+        // _gpuFrameLoopDone before returning so Stop/relaunch can dispose without deadlocking.
         private static void GpuLoop()
         {
             try
@@ -380,65 +398,73 @@ namespace LibRyubing
 
                 _device.Gpu.Renderer.RunLoop(() =>
                 {
-                    _device.Gpu.SetGpuThread();
-                    _device.Gpu.InitializeShaderCache(_gpuCancellation.Token);
-
-                    long ticksPerFrame = System.Diagnostics.Stopwatch.Frequency / TargetFps;
-                    long ticks = 0;
-                    System.Diagnostics.Stopwatch chrono = System.Diagnostics.Stopwatch.StartNew();
-
-                    while (_isActive)
+                    try
                     {
-                        if (_isStopped)
+                        _device.Gpu.SetGpuThread();
+                        _device.Gpu.InitializeShaderCache(_gpuCancellation.Token);
+
+                        long ticksPerFrame = System.Diagnostics.Stopwatch.Frequency / TargetFps;
+                        long ticks = 0;
+                        System.Diagnostics.Stopwatch chrono = System.Diagnostics.Stopwatch.StartNew();
+
+                        while (_isActive)
                         {
-                            break;
-                        }
-
-                        _npadManager?.Update();
-
-                        ticks += chrono.ElapsedTicks;
-                        chrono.Restart();
-
-                        if (_device.WaitFifo())
-                        {
-                            _device.Statistics.RecordFifoStart();
-                            _device.ProcessFrame();
-                            _device.Statistics.RecordFifoEnd();
-                        }
-
-                        while (_device.ConsumeFrameAvailable())
-                        {
-                            _device.PresentFrame(() =>
+                            if (_isStopped)
                             {
-                                if (_device.Gpu.Renderer is ThreadedRenderer threaded
-                                    && threaded.BaseRenderer is VulkanRenderer vulkanRenderer)
+                                break;
+                            }
+
+                            _npadManager?.Update();
+
+                            ticks += chrono.ElapsedTicks;
+                            chrono.Restart();
+
+                            if (_device.WaitFifo())
+                            {
+                                _device.Statistics.RecordFifoStart();
+                                _device.ProcessFrame();
+                                _device.Statistics.RecordFifoEnd();
+                            }
+
+                            while (_device.ConsumeFrameAvailable())
+                            {
+                                _device.PresentFrame(() =>
                                 {
-                                    NativeJni.SetCurrentTransform((int)vulkanRenderer.CurrentTransform);
-                                }
-                            });
+                                    if (_device.Gpu.Renderer is ThreadedRenderer threaded
+                                        && threaded.BaseRenderer is VulkanRenderer vulkanRenderer)
+                                    {
+                                        NativeJni.SetCurrentTransform((int)vulkanRenderer.CurrentTransform);
+                                    }
+                                });
+                            }
+
+                            if (_screenshotRequested)
+                            {
+                                _screenshotRequested = false;
+                                _device.Gpu.Renderer.Screenshot();
+                            }
+
+                            if (ticks >= ticksPerFrame)
+                            {
+                                ticks = Math.Min(ticks - ticksPerFrame, ticksPerFrame);
+                            }
                         }
 
-                        if (_screenshotRequested)
+                        if (_device.Gpu.Renderer is ThreadedRenderer threadedRenderer)
                         {
-                            _screenshotRequested = false;
-                            _device.Gpu.Renderer.Screenshot();
-                        }
-
-                        if (ticks >= ticksPerFrame)
-                        {
-                            ticks = Math.Min(ticks - ticksPerFrame, ticksPerFrame);
+                            threadedRenderer.FlushThreadedCommands();
                         }
                     }
-
-                    if (_device.Gpu.Renderer is ThreadedRenderer threaded)
+                    finally
                     {
-                        threaded.FlushThreadedCommands();
+                        _gpuFrameLoopDone.Set();
                     }
                 });
             }
             catch (Exception ex)
             {
                 Logger.Error?.Print(LogClass.Gpu, $"GPU loop terminated: {ex}");
+                _gpuFrameLoopDone?.Set();
             }
         }
 
@@ -448,6 +474,158 @@ namespace LibRyubing
             _isStopped = true;
             _isActive = false;
             _gpuCancellation?.Cancel();
+        }
+
+        /// <summary>
+        /// Hub titles (e.g. SM3DAS) call am ExecuteProgram to switch NCAs. Persistence.Index is
+        /// already updated; stop the current session and reload the same path so the new index loads.
+        /// </summary>
+        public static void ScheduleProgramRelaunch()
+        {
+            if (_programRelaunchInProgress)
+            {
+                return;
+            }
+
+            _programRelaunchInProgress = true;
+            RequestStop();
+
+            Thread relaunch = new(() =>
+            {
+                try
+                {
+                    lock (LifecycleLock)
+                    {
+                        // User Stop() clears this flag before taking the lock.
+                        if (!_programRelaunchInProgress)
+                        {
+                            return;
+                        }
+
+                        DisposeEmulationSession(resetUserChannel: false);
+
+                        if (!_programRelaunchInProgress)
+                        {
+                            _userChannelPersistence = new UserChannelPersistence();
+                            return;
+                        }
+
+                        if (_userChannelPersistence != null)
+                        {
+                            _userChannelPersistence.ShouldRestart = false;
+                        }
+
+                        string path = _lastApplicationPath;
+                        string displayName = _lastApplicationDisplayName ?? string.Empty;
+                        EmulatorSettings settings = _lastApplicationSettings;
+
+                        if (string.IsNullOrEmpty(path) || settings == null)
+                        {
+                            Logger.Error?.Print(LogClass.Application, "Program relaunch requested but no prior LoadApplication state.");
+                            _userChannelPersistence = new UserChannelPersistence();
+                            return;
+                        }
+
+                        Logger.Notice.Print(
+                            LogClass.Application,
+                            $"Relaunching application for program index {_userChannelPersistence.Index}.");
+
+                        if (!LoadApplication(path, displayName, settings))
+                        {
+                            Logger.Error?.Print(LogClass.Application, "Program relaunch LoadApplication failed.");
+                            _userChannelPersistence = new UserChannelPersistence();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error?.Print(LogClass.Application, $"Program relaunch failed: {ex}");
+                    _userChannelPersistence = new UserChannelPersistence();
+                }
+                finally
+                {
+                    _programRelaunchInProgress = false;
+                }
+            })
+            {
+                Name = "Ryubing.ProgramRelaunch",
+                IsBackground = true,
+            };
+
+            relaunch.Start();
+        }
+
+        private static void WaitForGpuFrameLoop(TimeSpan timeout)
+        {
+            ManualResetEventSlim done = _gpuFrameLoopDone;
+            if (done == null)
+            {
+                return;
+            }
+
+            if (!done.Wait(timeout))
+            {
+                Logger.Warning?.Print(
+                    LogClass.Application,
+                    $"GPU frame loop did not finish within {timeout.TotalSeconds:0.#}s");
+            }
+        }
+
+        private static void JoinGpuThread(TimeSpan timeout)
+        {
+            Thread gpu = _gpuThread;
+            _gpuThread = null;
+            if (gpu != null && gpu.IsAlive && gpu != Thread.CurrentThread)
+            {
+                if (!gpu.Join(timeout))
+                {
+                    Logger.Warning?.Print(
+                        LogClass.Application,
+                        $"GPU thread did not exit within {timeout.TotalSeconds:0.#}s");
+                }
+            }
+        }
+
+        private static void DisposeEmulationSession(bool resetUserChannel)
+        {
+            // ThreadedRenderer.RunLoop blocks Ryubing.GpuLoop in RenderLoop until Dispose.
+            // Join that thread first and we deadlock; wait for GPU.MainThread instead, dispose
+            // (which tears down VkSurfaceKHR / unblocks RenderLoop), then join.
+            RequestStop();
+            WaitForGpuFrameLoop(TimeSpan.FromSeconds(8));
+
+            try
+            {
+                _npadManager?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning?.Print(LogClass.Application, $"Npad dispose: {ex.Message}");
+            }
+
+            _npadManager = null;
+
+            try
+            {
+                _device?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning?.Print(LogClass.Application, $"Device dispose: {ex.Message}");
+            }
+
+            _device = null;
+            JoinGpuThread(TimeSpan.FromSeconds(5));
+
+            _gpuFrameLoopDone?.Dispose();
+            _gpuFrameLoopDone = null;
+            _emulationPaused = false;
+            _screenshotRequested = false;
+
+            if (resetUserChannel)
+            {
+                _userChannelPersistence = new UserChannelPersistence();
+            }
         }
 
         /// <summary>
@@ -642,42 +820,9 @@ namespace LibRyubing
         {
             lock (LifecycleLock)
             {
-                RequestStop();
-
-                Thread gpu = _gpuThread;
-                _gpuThread = null;
-                if (gpu != null && gpu.IsAlive && gpu != Thread.CurrentThread)
-                {
-                    // Keep this short — callers may be on Android's main thread via JNI.
-                    if (!gpu.Join(TimeSpan.FromMilliseconds(1500)))
-                    {
-                        Logger.Warning?.Print(LogClass.Application, "GPU thread did not exit within 1.5s");
-                    }
-                }
-
-                try
-                {
-                    _npadManager?.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    Logger.Warning?.Print(LogClass.Application, $"Npad dispose: {ex.Message}");
-                }
-
-                _npadManager = null;
-
-                try
-                {
-                    _device?.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    Logger.Warning?.Print(LogClass.Application, $"Device dispose: {ex.Message}");
-                }
-
-                _device = null;
-                _emulationPaused = false;
-                _screenshotRequested = false;
+                // User exit cancels an in-flight program switch and always clears program index.
+                _programRelaunchInProgress = false;
+                DisposeEmulationSession(resetUserChannel: true);
             }
         }
 

@@ -14,6 +14,7 @@ import android.view.OrientationEventListener
 class MotionSensorManager(
     context: Context,
     private val onMotion: (ax: Float, ay: Float, az: Float, gx: Float, gy: Float, gz: Float) -> Unit,
+    private val sensitivity: Float = 1f,
 ) : SensorEventListener2 {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
@@ -78,7 +79,8 @@ class MotionSensorManager(
             }
             else -> return
         }
-        onMotion(lastAx, lastAy, lastAz, lastGx, lastGy, lastGz)
+        val s = sensitivity
+        onMotion(lastAx * s, lastAy * s, lastAz * s, lastGx * s, lastGy * s, lastGz * s)
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
