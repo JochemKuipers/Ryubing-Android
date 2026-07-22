@@ -18,11 +18,33 @@ class SettingsRepository(context: Context) {
         systemRegion = prefs.getInt(KEY_REGION, 1),
         dockedMode = prefs.getBoolean(KEY_DOCKED, false),
         enablePptc = prefs.getBoolean(KEY_PPTC, false),
+        enableLowPowerPtc = prefs.getBoolean(KEY_LOW_POWER_PTC, false),
+        enableFsIntegrity = prefs.getBoolean(KEY_FS_INTEGRITY, true),
+        enableInternet = prefs.getBoolean(KEY_INTERNET, false),
+        ignoreMissingServices = prefs.getBoolean(KEY_IGNORE_MISSING, false),
+        matchSystemTime = prefs.getBoolean(KEY_MATCH_SYSTEM_TIME, false),
+        timeZone = prefs.getString(KEY_TIME_ZONE, "UTC") ?: "UTC",
+        systemTimeOffset = prefs.getLong(KEY_SYSTEM_TIME_OFFSET, 0L),
+        tickScalar = prefs.getLong(KEY_TICK_SCALAR, 200L),
         enableShaderCache = prefs.getBoolean(KEY_SHADER_CACHE, true),
         backendThreading = prefs.getInt(KEY_BACKEND_THREADING, 0),
         resScale = prefs.getFloat(KEY_RES_SCALE, 1f),
+        vsyncMode = prefs.getInt(KEY_VSYNC_MODE, 0),
+        customVSyncInterval = prefs.getInt(KEY_CUSTOM_VSYNC_INTERVAL, 120),
+        enableCustomVSync = prefs.getBoolean(KEY_ENABLE_CUSTOM_VSYNC, false),
+        maxAnisotropy = prefs.getFloat(KEY_MAX_ANISOTROPY, -1f),
+        aspectRatio = prefs.getInt(KEY_ASPECT_RATIO, 1),
+        antiAliasing = prefs.getInt(KEY_ANTI_ALIASING, 0),
+        scalingFilter = prefs.getInt(KEY_SCALING_FILTER, 0),
+        scalingFilterLevel = prefs.getInt(KEY_SCALING_FILTER_LEVEL, 80),
+        enableTextureRecompression = prefs.getBoolean(KEY_TEXTURE_RECOMPRESSION, false),
+        enableMacroHle = prefs.getBoolean(KEY_MACRO_HLE, true),
+        enableColorSpacePassthrough = prefs.getBoolean(KEY_COLOR_SPACE, false),
+        enableFileLog = prefs.getBoolean(KEY_FILE_LOG, false),
+        audioVolume = prefs.getFloat(KEY_AUDIO_VOLUME, 1f),
         useSwitchLayout = prefs.getBoolean(KEY_SWITCH_LAYOUT, true),
         showTouchControls = prefs.getBoolean(KEY_TOUCH_CONTROLS, true),
+        updatesFolderUri = prefs.getString(KEY_UPDATES_FOLDER_URI, "") ?: "",
     )
 
     fun save(config: EmulatorConfig) = prefs.edit {
@@ -32,11 +54,33 @@ class SettingsRepository(context: Context) {
         putInt(KEY_REGION, config.systemRegion)
         putBoolean(KEY_DOCKED, config.dockedMode)
         putBoolean(KEY_PPTC, config.enablePptc)
+        putBoolean(KEY_LOW_POWER_PTC, config.enableLowPowerPtc)
+        putBoolean(KEY_FS_INTEGRITY, config.enableFsIntegrity)
+        putBoolean(KEY_INTERNET, config.enableInternet)
+        putBoolean(KEY_IGNORE_MISSING, config.ignoreMissingServices)
+        putBoolean(KEY_MATCH_SYSTEM_TIME, config.matchSystemTime)
+        putString(KEY_TIME_ZONE, config.timeZone)
+        putLong(KEY_SYSTEM_TIME_OFFSET, config.systemTimeOffset)
+        putLong(KEY_TICK_SCALAR, config.tickScalar)
         putBoolean(KEY_SHADER_CACHE, config.enableShaderCache)
         putInt(KEY_BACKEND_THREADING, config.backendThreading)
         putFloat(KEY_RES_SCALE, config.resScale)
+        putInt(KEY_VSYNC_MODE, config.vsyncMode)
+        putInt(KEY_CUSTOM_VSYNC_INTERVAL, config.customVSyncInterval)
+        putBoolean(KEY_ENABLE_CUSTOM_VSYNC, config.enableCustomVSync)
+        putFloat(KEY_MAX_ANISOTROPY, config.maxAnisotropy)
+        putInt(KEY_ASPECT_RATIO, config.aspectRatio)
+        putInt(KEY_ANTI_ALIASING, config.antiAliasing)
+        putInt(KEY_SCALING_FILTER, config.scalingFilter)
+        putInt(KEY_SCALING_FILTER_LEVEL, config.scalingFilterLevel)
+        putBoolean(KEY_TEXTURE_RECOMPRESSION, config.enableTextureRecompression)
+        putBoolean(KEY_MACRO_HLE, config.enableMacroHle)
+        putBoolean(KEY_COLOR_SPACE, config.enableColorSpacePassthrough)
+        putBoolean(KEY_FILE_LOG, config.enableFileLog)
+        putFloat(KEY_AUDIO_VOLUME, config.audioVolume)
         putBoolean(KEY_SWITCH_LAYOUT, config.useSwitchLayout)
         putBoolean(KEY_TOUCH_CONTROLS, config.showTouchControls)
+        putString(KEY_UPDATES_FOLDER_URI, config.updatesFolderUri)
     }
 
     private companion object {
@@ -46,10 +90,32 @@ class SettingsRepository(context: Context) {
         const val KEY_REGION = "region"
         const val KEY_DOCKED = "docked"
         const val KEY_PPTC = "pptc"
+        const val KEY_LOW_POWER_PTC = "low_power_ptc"
+        const val KEY_FS_INTEGRITY = "fs_integrity"
+        const val KEY_INTERNET = "internet"
+        const val KEY_IGNORE_MISSING = "ignore_missing"
+        const val KEY_MATCH_SYSTEM_TIME = "match_system_time"
+        const val KEY_TIME_ZONE = "time_zone"
+        const val KEY_SYSTEM_TIME_OFFSET = "system_time_offset"
+        const val KEY_TICK_SCALAR = "tick_scalar"
         const val KEY_SHADER_CACHE = "shader_cache"
         const val KEY_BACKEND_THREADING = "backend_threading"
         const val KEY_RES_SCALE = "res_scale"
+        const val KEY_VSYNC_MODE = "vsync_mode"
+        const val KEY_CUSTOM_VSYNC_INTERVAL = "custom_vsync_interval"
+        const val KEY_ENABLE_CUSTOM_VSYNC = "enable_custom_vsync"
+        const val KEY_MAX_ANISOTROPY = "max_anisotropy"
+        const val KEY_ASPECT_RATIO = "aspect_ratio"
+        const val KEY_ANTI_ALIASING = "anti_aliasing"
+        const val KEY_SCALING_FILTER = "scaling_filter"
+        const val KEY_SCALING_FILTER_LEVEL = "scaling_filter_level"
+        const val KEY_TEXTURE_RECOMPRESSION = "texture_recompression"
+        const val KEY_MACRO_HLE = "macro_hle"
+        const val KEY_COLOR_SPACE = "color_space"
+        const val KEY_FILE_LOG = "file_log"
+        const val KEY_AUDIO_VOLUME = "audio_volume"
         const val KEY_SWITCH_LAYOUT = "switch_layout"
         const val KEY_TOUCH_CONTROLS = "touch_controls"
+        const val KEY_UPDATES_FOLDER_URI = "updates_folder_uri"
     }
 }

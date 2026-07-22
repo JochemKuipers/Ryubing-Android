@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -38,6 +40,7 @@ fun EmulationScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val showTouchOverlay = remember { mutableStateOf(config.showTouchControls) }
 
     DisposableEffect(Unit) {
         val activity = context as? ComponentActivity
@@ -55,7 +58,12 @@ fun EmulationScreen(
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
+        session.onShowUiRequested = {
+            showTouchOverlay.value = !showTouchOverlay.value
+        }
+
         onDispose {
+            session.onShowUiRequested = null
             session.stop()
             session.setSurface(null)
             activity?.let { host ->
@@ -99,7 +107,7 @@ fun EmulationScreen(
             },
         )
 
-        if (config.showTouchControls) {
+        if (showTouchOverlay.value) {
             TouchControls(
                 modifier = Modifier.fillMaxSize(),
                 onButton = session::setButton,

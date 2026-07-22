@@ -8,15 +8,19 @@ import kotlin.math.abs
 
 /**
  * Maps Android gamepad key/motion events (built-in handheld controls, Bluetooth pads)
- * into [EmulationSession] input using a user-defined [ControllerMapping].
+ * into [EmulationSession] input using a user-defined [ControllerMapping], and dispatches
+ * [GamepadHotkeyMapping] actions before Switch button mappings.
  */
 class PhysicalGamepadController(
     private val session: EmulationSession,
     mapping: ControllerMapping,
+    hotkeys: GamepadHotkeyMapping = GamepadHotkeyMapping(),
 ) {
     private var leftTriggerPressed = false
     private var rightTriggerPressed = false
     private var mappingHolder: ControllerMapping = mapping
+    private var hotkeysHolder: GamepadHotkeyMapping = hotkeys
+    private var turboHeldActive = false
 
     fun updateMapping(mapping: ControllerMapping) {
         leftTriggerPressed = false
@@ -24,12 +28,42 @@ class PhysicalGamepadController(
         mappingHolder = mapping
     }
 
+    fun updateHotkeys(hotkeys: GamepadHotkeyMapping) {
+        if (turboHeldActive) {
+            session.setTurboHeld(false)
+            turboHeldActive = false
+        }
+        hotkeysHolder = hotkeys
+    }
+
     fun onKeyEvent(event: KeyEvent): Boolean {
         if (ControllerKeyCapture.isActive) return false
-
-        val button = mappingHolder.switchButtonForKey(event.keyCode) ?: return false
         if ((event.flags and KeyEvent.FLAG_FALLBACK) != 0) return false
 
+        val hotkey = hotkeysHolder.actionForKey(event.keyCode)
+        if (hotkey != null) {
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    if (event.repeatCount > 0) return true
+                    if (hotkey == HotkeyAction.TurboMode && hotkeysHolder.turboModeWhileHeld) {
+                        turboHeldActive = true
+                        session.setTurboHeld(true)
+                    } else {
+                        session.performHotkey(hotkey)
+                    }
+                }
+                KeyEvent.ACTION_UP -> {
+                    if (hotkey == HotkeyAction.TurboMode && hotkeysHolder.turboModeWhileHeld) {
+                        turboHeldActive = false
+                        session.setTurboHeld(false)
+                    }
+                }
+                else -> return false
+            }
+            return true
+        }
+
+        val button = mappingHolder.switchButtonForKey(event.keyCode) ?: return false
         when (event.action) {
             KeyEvent.ACTION_DOWN -> session.setButton(button, true)
             KeyEvent.ACTION_UP -> session.setButton(button, false)

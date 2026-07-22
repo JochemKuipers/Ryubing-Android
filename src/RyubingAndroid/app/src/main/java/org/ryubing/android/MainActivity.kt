@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import org.ryubing.android.data.ControllerMappingRepository
 import org.ryubing.android.data.DriverRepository
+import org.ryubing.android.data.GamepadHotkeyRepository
 import org.ryubing.android.data.GameRepository
 import org.ryubing.android.data.SettingsRepository
 import org.ryubing.android.emu.EmulationSession
@@ -21,6 +22,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var session: EmulationSession
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var mappingRepository: ControllerMappingRepository
+    private lateinit var hotkeyRepository: GamepadHotkeyRepository
     private var physicalGamepad: PhysicalGamepadController? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,6 +32,7 @@ class MainActivity : ComponentActivity() {
         val gameRepo = GameRepository(applicationContext)
         settingsRepository = SettingsRepository(applicationContext)
         mappingRepository = ControllerMappingRepository(applicationContext)
+        hotkeyRepository = GamepadHotkeyRepository(applicationContext)
         val driverRepo = DriverRepository(applicationContext)
         session = EmulationSession(
             applicationContext,
@@ -45,9 +48,11 @@ class MainActivity : ComponentActivity() {
                     gameRepository = gameRepo,
                     settingsRepository = settingsRepository,
                     mappingRepository = mappingRepository,
+                    hotkeyRepository = hotkeyRepository,
                     driverRepository = driverRepo,
                     session = session,
                     onControllerMappingChanged = ::refreshPhysicalGamepad,
+                    onHotkeysChanged = ::refreshPhysicalGamepad,
                 )
             }
         }
@@ -55,11 +60,13 @@ class MainActivity : ComponentActivity() {
 
     fun refreshPhysicalGamepad() {
         val mapping = mappingRepository.load()
+        val hotkeys = hotkeyRepository.load()
         val existing = physicalGamepad
         if (existing != null) {
             existing.updateMapping(mapping)
+            existing.updateHotkeys(hotkeys)
         } else {
-            physicalGamepad = PhysicalGamepadController(session, mapping)
+            physicalGamepad = PhysicalGamepadController(session, mapping, hotkeys)
         }
     }
 

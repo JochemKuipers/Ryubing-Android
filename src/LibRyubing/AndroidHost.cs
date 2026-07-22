@@ -1,5 +1,6 @@
 using LibRyubing.Input;
 using LibRyubing.Platform;
+using OpenTK.Audio.OpenAL;
 using Ryujinx.Audio.Backends.OpenAL;
 using Ryujinx.Audio.Integration;
 using Ryujinx.Common;
@@ -23,6 +24,7 @@ using Silk.NET.Vulkan;
 using System;
 using System.IO;
 using System.Threading;
+using ARMeilleure;
 
 namespace LibRyubing
 {
@@ -53,6 +55,8 @@ namespace LibRyubing
 
         private static volatile bool _isActive;
         private static volatile bool _isStopped;
+        private static float _volumeBeforeMute = 1f;
+        private static bool _emulationPaused;
 
         public static Switch Device => _device;
         public static AndroidGamepadDriver GamepadDriver => _gamepadDriver;
@@ -75,6 +79,10 @@ namespace LibRyubing
         public static void Initialize(string appDataPath)
         {
             PlatformInfo.IsBionic = true;
+
+            // OpenTK looks for platform-specific OpenAL sonames; on Android the bundled
+            // library is libopenal.so (see native-deps/build-openal.sh / jniLibs).
+            OpenALLibraryNameContainer.OverridePath = "libopenal.so";
 
             // NativeAOT on Android does not support Reflection.Emit; MacroJitCompiler uses
             // DynamicMethod and will crash at runtime. Fall back to the interpreter instead.
@@ -181,7 +189,21 @@ namespace LibRyubing
 
             GraphicsConfig.EnableShaderCache = settings.EnableShaderCache;
             GraphicsConfig.ResScale = settings.ResScale;
-            GraphicsConfig.EnableMacroHLE = true;
+            GraphicsConfig.MaxAnisotropy = settings.MaxAnisotropy;
+            GraphicsConfig.EnableMacroHLE = settings.EnableMacroHLE;
+            GraphicsConfig.EnableTextureRecompression = settings.EnableTextureRecompression;
+            GraphicsConfig.EnableColorSpacePassthrough = settings.EnableColorSpacePassthrough;
+
+            Optimizations.LowPower = settings.EnableLowPowerPtc;
+
+            if (settings.EnableFileLog)
+            {
+                FileStream logStream = FileLogTarget.PrepareLogFile(Path.Combine(AppDataManager.BaseDirPath, "Logs"));
+                if (logStream != null)
+                {
+                    Logger.AddTarget(new AsyncLogTargetWrapper(new FileLogTarget("file", logStream), 1000));
+                }
+            }
 
             IRenderer renderer = CreateVulkanRenderer(settings);
 
@@ -197,6 +219,16 @@ namespace LibRyubing
                     _uiHandler);
 
             _device = new Switch(configuration);
+
+            // Apply present-time graphics window settings after the renderer exists.
+            _device.Gpu.Renderer.Window.SetAntiAliasing(settings.AntiAliasing);
+            _device.Gpu.Renderer.Window.SetScalingFilter(settings.ScalingFilter);
+            _device.Gpu.Renderer.Window.SetScalingFilterLevel(settings.ScalingFilterLevel);
+
+            if (settings.EnableCustomVSyncInterval)
+            {
+                _device.CustomVSyncIntervalEnabled = true;
+            }
 
             SystemVersion firmware = _contentManager.GetCurrentFirmwareVersion();
             Logger.Notice.Print(LogClass.Application, $"Firmware version: {firmware?.VersionString ?? "not installed"}");
@@ -238,29 +270,30 @@ namespace LibRyubing
             return new Ryujinx.Audio.Backends.Dummy.DummyHardwareDeviceDriver();
         }
 
-        private static HleConfiguration BuildConfiguration(EmulatorSettings settings) =>
-            new(
+        private static HleConfiguration BuildConfiguration(EmulatorSettings settings)
+        {
+            // Match desktop: MatchSystemTime forces offset 0 so guest clock tracks host.
+            long timeOffset = settings.MatchSystemTime ? 0 : settings.SystemTimeOffset;
+
+            return new(
                 settings.MemoryConfiguration,
                 (SystemLanguage)settings.SystemLanguage,
                 (RegionCode)settings.SystemRegion,
                 settings.VSyncMode,
                 enableDockedMode: settings.EnableDockedMode,
-                // PPTC is off by default on Android for stability (see docs/kenji-audit-notes.md).
                 enablePtc: settings.EnablePtc,
-                tickScalar: ITickSource.RealityTickScalar,
-                enableInternetAccess: false,
+                tickScalar: settings.TickScalar,
+                enableInternetAccess: settings.EnableInternetAccess,
                 fsIntegrityCheckLevel: settings.EnableFsIntegrityChecks
                     ? LibHac.Tools.FsSystem.IntegrityCheckLevel.ErrorOnInvalid
                     : LibHac.Tools.FsSystem.IntegrityCheckLevel.None,
                 fsGlobalAccessLogMode: 0,
-                systemTimeOffset: 0,
-                timeZone: "UTC",
-                // HostMappedUnsafe is fastest; the app can downgrade for correctness.
+                systemTimeOffset: timeOffset,
+                timeZone: string.IsNullOrEmpty(settings.TimeZone) ? "UTC" : settings.TimeZone,
                 memoryManagerMode: settings.MemoryManagerMode,
-                ignoreMissingServices: false,
-                aspectRatio: AspectRatio.Fixed16x9,
+                ignoreMissingServices: settings.IgnoreMissingServices,
+                aspectRatio: settings.AspectRatio,
                 audioVolume: settings.AudioVolume,
-                // NCE/hypervisor off by default on Android; ARMeilleure JIT path is used.
                 useHypervisor: false,
                 multiplayerLanInterfaceId: string.Empty,
                 multiplayerMode: MultiplayerMode.Disabled,
@@ -270,7 +303,8 @@ namespace LibRyubing
                 enableGdbStub: false,
                 gdbStubPort: 0,
                 debuggerSuspendOnStart: false,
-                customVSyncInterval: 120);
+                customVSyncInterval: settings.CustomVSyncInterval);
+        }
 
         private static bool LoadByExtension(string path, string displayName)
         {
@@ -414,6 +448,121 @@ namespace LibRyubing
             }
         }
 
+        // --- Content probing (DLC / updates / library metadata) ---
+
+        public static bool QueryApplicationInfo(string path, string displayName, string outJsonPath) =>
+            _virtualFileSystem != null && ContentProbe.QueryApplicationInfo(_virtualFileSystem, path, displayName, outJsonPath);
+
+        public static bool ProbeTitleUpdate(string path, string displayName, string outJsonPath) =>
+            _virtualFileSystem != null && ContentProbe.ProbeTitleUpdate(_virtualFileSystem, path, displayName, outJsonPath);
+
+        public static bool GetDlcContentList(string path, string displayName, ulong titleId, string outJsonPath) =>
+            _virtualFileSystem != null && ContentProbe.GetDlcContentList(_virtualFileSystem, path, displayName, titleId, outJsonPath);
+
+        // --- Runtime hotkey actions ---
+
+        public static void TogglePause()
+        {
+            if (_device == null)
+            {
+                return;
+            }
+
+            _emulationPaused = !_emulationPaused;
+            _device.System.TogglePauseEmulation(_emulationPaused);
+        }
+
+        public static void ToggleMute()
+        {
+            if (_device == null)
+            {
+                return;
+            }
+
+            if (_device.IsAudioMuted())
+            {
+                _device.SetVolume(_volumeBeforeMute <= 0f ? 1f : _volumeBeforeMute);
+            }
+            else
+            {
+                _volumeBeforeMute = _device.GetVolume();
+                _device.SetVolume(0f);
+            }
+        }
+
+        public static void AdjustVolume(float delta)
+        {
+            if (_device == null)
+            {
+                return;
+            }
+
+            float next = Math.Clamp(_device.GetVolume() + delta, 0f, 1f);
+            _device.SetVolume(next);
+            if (next > 0f)
+            {
+                _volumeBeforeMute = next;
+            }
+        }
+
+        public static void ToggleVSyncMode()
+        {
+            if (_device == null)
+            {
+                return;
+            }
+
+            _device.VSyncMode = _device.VSyncMode.Next(_device.CustomVSyncIntervalEnabled);
+            _device.UpdateVSyncInterval();
+        }
+
+        public static void AdjustResScale(int direction)
+        {
+            float scale = GraphicsConfig.ResScale;
+            scale = direction >= 0 ? Math.Min(scale + 0.5f, 4f) : Math.Max(scale - 0.5f, 0.5f);
+            GraphicsConfig.ResScale = scale;
+        }
+
+        public static void AdjustCustomVSync(int direction)
+        {
+            if (_device == null)
+            {
+                return;
+            }
+
+            if (direction >= 0)
+            {
+                _device.IncrementCustomVSyncInterval();
+            }
+            else
+            {
+                _device.DecrementCustomVSyncInterval();
+            }
+        }
+
+        public static void ToggleTurbo()
+        {
+            _device?.ToggleTurbo();
+        }
+
+        public static void SetTurboHeld(bool held)
+        {
+            if (_device == null)
+            {
+                return;
+            }
+
+            if (held != _device.TurboMode)
+            {
+                _device.ToggleTurbo();
+            }
+        }
+
+        public static void TakeScreenshot()
+        {
+            _uiHandler?.TakeScreenshot();
+        }
+
         /// <summary>Stops emulation and disposes the current device. Blocks until the GPU thread exits.</summary>
         public static void Stop()
         {
@@ -427,6 +576,7 @@ namespace LibRyubing
 
             _device?.Dispose();
             _device = null;
+            _emulationPaused = false;
         }
 
         public static void Shutdown()

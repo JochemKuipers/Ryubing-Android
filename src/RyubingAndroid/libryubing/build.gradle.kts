@@ -3,6 +3,13 @@
 // app's jniLibs so it gets packaged into the APK.
 
 import org.gradle.internal.os.OperatingSystem
+import org.gradle.process.ExecOperations
+import javax.inject.Inject
+
+// Injection point for ExecOperations — Project.exec is deprecated (removed in Gradle 9).
+interface InjectedExecOps {
+    @get:Inject val execOps: ExecOperations
+}
 
 val repoRoot: File = rootProject.projectDir.parentFile.parentFile // -> /home/jochem/Ryubing-Android
 val libRyubingProject = File(repoRoot, "src/LibRyubing/LibRyubing.csproj")
@@ -87,26 +94,28 @@ val applyUpstreamPatches = tasks.register("applyUpstreamPatches") {
         !isWindowsHost
     }
 
+    val execOps = objects.newInstance<InjectedExecOps>().execOps
+
     doLast {
         val pinnedCommit = readPinnedUpstreamCommit()
 
         // Ensure the submodule object is present; checkout the pristine Ryubing pin from
         // compat/pins.json (not a locally patched submodule SHA that may have been committed).
-        project.exec {
+        execOps.exec {
             workingDir = repoRoot
             commandLine("git", "submodule", "update", "--init", "--force", "upstream/ryubing")
         }
-        project.exec {
+        execOps.exec {
             workingDir = upstreamDir
             commandLine("git", "checkout", "--force", pinnedCommit)
         }
         // git apply leaves untracked files (e.g. PlatformInfo.cs) that checkout alone does
         // not remove; reset + clean so patches always apply to a pristine tree.
-        project.exec {
+        execOps.exec {
             workingDir = upstreamDir
             commandLine("git", "reset", "--hard", "HEAD")
         }
-        project.exec {
+        execOps.exec {
             workingDir = upstreamDir
             commandLine("git", "clean", "-fdx")
         }
@@ -119,7 +128,7 @@ val applyUpstreamPatches = tasks.register("applyUpstreamPatches") {
         for (patch in patches) {
             // `git apply` reads git-format-patch files (it ignores the mbox headers) and runs
             // cross-platform without needing bash or git-am, unlike scripts/apply-patches.sh.
-            project.exec {
+            execOps.exec {
                 workingDir = upstreamDir
                 commandLine("git", "apply", "--whitespace=nowarn", patch.absolutePath)
             }

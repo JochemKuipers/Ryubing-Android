@@ -4,13 +4,12 @@ using Ryujinx.HLE;
 namespace LibRyubing
 {
     /// <summary>
-    /// The subset of Ryubing configuration the Android host needs to start a title.
+    /// Subset of Ryubing configuration the Android host needs to start a title.
     /// Populated by the Kotlin settings UI and passed in via the native ABI. Defaults
     /// are deliberately conservative for mobile stability (see docs/kenji-audit-notes.md).
     /// </summary>
     internal sealed class EmulatorSettings
     {
-        /// <summary>Guest DRAM size. 4 GiB is the retail Switch default.</summary>
         public MemoryConfiguration MemoryConfiguration { get; set; } = MemoryConfiguration.MemoryConfiguration4GiB;
 
         /// <summary>Values match <c>Ryujinx.HLE.HOS.SystemState.SystemLanguage</c>.</summary>
@@ -21,21 +20,57 @@ namespace LibRyubing
 
         public VSyncMode VSyncMode { get; set; } = VSyncMode.Switch;
 
-        public bool EnableDockedMode { get; set; } = false;
+        public int CustomVSyncInterval { get; set; } = 120;
+
+        public bool EnableCustomVSyncInterval { get; set; }
+
+        public bool EnableDockedMode { get; set; }
 
         /// <summary>PPTC is off by default on Android (memory + startup cost).</summary>
-        public bool EnablePtc { get; set; } = false;
+        public bool EnablePtc { get; set; }
+
+        public bool EnableLowPowerPtc { get; set; }
 
         public bool EnableFsIntegrityChecks { get; set; } = true;
 
         public bool EnableShaderCache { get; set; } = true;
 
-        /// <summary>HostMappedUnsafe is fastest; downgrade to HostMapped for correctness.</summary>
+        public bool EnableInternetAccess { get; set; }
+
+        public bool IgnoreMissingServices { get; set; }
+
+        public bool MatchSystemTime { get; set; }
+
+        public string TimeZone { get; set; } = "UTC";
+
+        public long SystemTimeOffset { get; set; }
+
+        /// <summary>Turbo tick scalar (percent of realtime). Desktop default is typically 200.</summary>
+        public long TickScalar { get; set; } = 200;
+
         public MemoryManagerMode MemoryManagerMode { get; set; } = MemoryManagerMode.HostMappedUnsafe;
 
         public BackendThreading BackendThreading { get; set; } = BackendThreading.Auto;
 
         public float ResScale { get; set; } = 1f;
+
+        public float MaxAnisotropy { get; set; } = -1f;
+
+        public AspectRatio AspectRatio { get; set; } = AspectRatio.Fixed16x9;
+
+        public AntiAliasing AntiAliasing { get; set; } = AntiAliasing.None;
+
+        public ScalingFilter ScalingFilter { get; set; } = ScalingFilter.Bilinear;
+
+        public int ScalingFilterLevel { get; set; } = 80;
+
+        public bool EnableTextureRecompression { get; set; }
+
+        public bool EnableMacroHLE { get; set; } = true;
+
+        public bool EnableColorSpacePassthrough { get; set; }
+
+        public bool EnableFileLog { get; set; }
 
         public float AudioVolume { get; set; } = 1f;
 

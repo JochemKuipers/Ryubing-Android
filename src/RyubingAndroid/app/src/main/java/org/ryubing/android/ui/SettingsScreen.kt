@@ -1,8 +1,10 @@
 package org.ryubing.android.ui
 
+import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,12 +14,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -37,8 +43,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ryubing.android.R
+import org.ryubing.android.data.EmulatorConfig
 import org.ryubing.android.data.SettingsRepository
 import org.ryubing.android.emu.EmulationSession
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,13 +54,14 @@ fun SettingsScreen(
     repository: SettingsRepository,
     session: EmulationSession,
     onOpenControllerRemap: () -> Unit,
+    onOpenHotkeys: () -> Unit,
     onBack: () -> Unit,
 ) {
     var config by remember { mutableStateOf(repository.load()) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    fun update(newConfig: org.ryubing.android.data.EmulatorConfig) {
+    fun update(newConfig: EmulatorConfig) {
         config = newConfig
         repository.save(newConfig)
     }
@@ -83,6 +92,20 @@ fun SettingsScreen(
         }
     }
 
+    val updatesFolderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        } catch (_: SecurityException) {
+        }
+        update(config.copy(updatesFolderUri = uri.toString()))
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -98,12 +121,154 @@ fun SettingsScreen(
         Column(
             Modifier.padding(padding).padding(16.dp).verticalScroll(rememberScrollState()),
         ) {
+            SectionTitle("System")
+            DropdownRow(
+                label = "Language",
+                valueLabel = languageLabel(config.systemLanguage),
+                options = LANGUAGE_OPTIONS,
+                selected = config.systemLanguage,
+                onSelect = { update(config.copy(systemLanguage = it)) },
+            )
+            DropdownRow(
+                label = "Region",
+                valueLabel = regionLabel(config.systemRegion),
+                options = REGION_OPTIONS,
+                selected = config.systemRegion,
+                onSelect = { update(config.copy(systemRegion = it)) },
+            )
+            DropdownRow(
+                label = "DRAM",
+                valueLabel = dramLabel(config.memoryConfiguration),
+                options = DRAM_OPTIONS,
+                selected = config.memoryConfiguration,
+                onSelect = { update(config.copy(memoryConfiguration = it)) },
+            )
+            DropdownRow(
+                label = "Memory manager",
+                valueLabel = memoryModeLabel(config.memoryManagerMode),
+                options = MEMORY_MODE_OPTIONS,
+                selected = config.memoryManagerMode,
+                onSelect = { update(config.copy(memoryManagerMode = it)) },
+            )
             SwitchRow("Docked mode", config.dockedMode) { update(config.copy(dockedMode = it)) }
-            SwitchRow("Enable PPTC (experimental on mobile)", config.enablePptc) { update(config.copy(enablePptc = it)) }
-            SwitchRow("Shader cache", config.enableShaderCache) { update(config.copy(enableShaderCache = it)) }
+            SwitchRow("Enable PPTC", config.enablePptc) { update(config.copy(enablePptc = it)) }
+            SwitchRow("Low-power PPTC", config.enableLowPowerPtc) {
+                update(config.copy(enableLowPowerPtc = it))
+            }
+            SwitchRow("FS integrity checks", config.enableFsIntegrity) {
+                update(config.copy(enableFsIntegrity = it))
+            }
+            SwitchRow("Internet access", config.enableInternet) {
+                update(config.copy(enableInternet = it))
+            }
+            SwitchRow("Ignore missing services", config.ignoreMissingServices) {
+                update(config.copy(ignoreMissingServices = it))
+            }
+            SwitchRow("Match system time", config.matchSystemTime) {
+                update(config.copy(matchSystemTime = it))
+            }
+            DropdownRow(
+                label = "Time zone",
+                valueLabel = config.timeZone,
+                options = TIMEZONE_OPTIONS,
+                selected = TIMEZONE_OPTIONS.indexOfFirst { it.second == config.timeZone }.coerceAtLeast(0),
+                onSelect = { update(config.copy(timeZone = TIMEZONE_OPTIONS[it].second)) },
+            )
+            SwitchRow("File logging", config.enableFileLog) {
+                update(config.copy(enableFileLog = it))
+            }
 
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            Text("Input", style = MaterialTheme.typography.titleMedium)
+            SectionTitle("Graphics")
+            DropdownRow(
+                label = "Resolution scale",
+                valueLabel = "${config.resScale}x",
+                options = RES_SCALE_OPTIONS,
+                selected = resScaleToIndex(config.resScale),
+                onSelect = { update(config.copy(resScale = RES_SCALE_VALUES[it])) },
+            )
+            DropdownRow(
+                label = "VSync",
+                valueLabel = vsyncLabel(config.vsyncMode),
+                options = VSYNC_OPTIONS,
+                selected = config.vsyncMode,
+                onSelect = { update(config.copy(vsyncMode = it)) },
+            )
+            SwitchRow("Custom VSync interval", config.enableCustomVSync) {
+                update(config.copy(enableCustomVSync = it))
+            }
+            IntStepperRow(
+                label = "Custom VSync Hz",
+                value = config.customVSyncInterval,
+                range = 30..240,
+                step = 5,
+                onChange = { update(config.copy(customVSyncInterval = it)) },
+            )
+            DropdownRow(
+                label = "Aspect ratio",
+                valueLabel = aspectLabel(config.aspectRatio),
+                options = ASPECT_OPTIONS,
+                selected = config.aspectRatio,
+                onSelect = { update(config.copy(aspectRatio = it)) },
+            )
+            DropdownRow(
+                label = "Anti-aliasing",
+                valueLabel = aaLabel(config.antiAliasing),
+                options = AA_OPTIONS,
+                selected = config.antiAliasing,
+                onSelect = { update(config.copy(antiAliasing = it)) },
+            )
+            DropdownRow(
+                label = "Scaling filter",
+                valueLabel = scalingFilterLabel(config.scalingFilter),
+                options = SCALING_FILTER_OPTIONS,
+                selected = config.scalingFilter,
+                onSelect = { update(config.copy(scalingFilter = it)) },
+            )
+            SliderRow(
+                label = "Scaling filter level: ${config.scalingFilterLevel}",
+                value = config.scalingFilterLevel.toFloat(),
+                range = 0f..100f,
+                onChange = { update(config.copy(scalingFilterLevel = it.roundToInt())) },
+            )
+            DropdownRow(
+                label = "Max anisotropy",
+                valueLabel = anisotropyLabel(config.maxAnisotropy),
+                options = ANISOTROPY_OPTIONS,
+                selected = anisotropyToIndex(config.maxAnisotropy),
+                onSelect = { update(config.copy(maxAnisotropy = ANISOTROPY_VALUES[it])) },
+            )
+            DropdownRow(
+                label = "Backend threading",
+                valueLabel = backendThreadingLabel(config.backendThreading),
+                options = BACKEND_THREADING_OPTIONS,
+                selected = config.backendThreading,
+                onSelect = { update(config.copy(backendThreading = it)) },
+            )
+            SwitchRow("Shader cache", config.enableShaderCache) {
+                update(config.copy(enableShaderCache = it))
+            }
+            SwitchRow("Texture recompression", config.enableTextureRecompression) {
+                update(config.copy(enableTextureRecompression = it))
+            }
+            SwitchRow("Macro HLE", config.enableMacroHle) {
+                update(config.copy(enableMacroHle = it))
+            }
+            SwitchRow("Color space passthrough", config.enableColorSpacePassthrough) {
+                update(config.copy(enableColorSpacePassthrough = it))
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            SectionTitle("Audio")
+            SliderRow(
+                label = "Volume: ${(config.audioVolume * 100).roundToInt()}%",
+                value = config.audioVolume,
+                range = 0f..1f,
+                onChange = { update(config.copy(audioVolume = it)) },
+            )
+
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            SectionTitle("Input")
             Button(
                 onClick = onOpenControllerRemap,
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -115,18 +280,44 @@ fun SettingsScreen(
             }
 
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            Text("Graphics", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Memory manager: ${memoryModeLabel(config.memoryManagerMode)}",
-                Modifier.padding(vertical = 4.dp),
-            )
-            Text(
-                "Resolution scale: ${config.resScale}x",
-                Modifier.padding(bottom = 12.dp),
-            )
+            SectionTitle("Hotkeys")
+            Button(
+                onClick = onOpenHotkeys,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            ) {
+                Text("Configure hotkeys")
+            }
 
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            Text("System", style = MaterialTheme.typography.titleMedium)
+            SectionTitle("Content")
+            Text(
+                "Updates / DLC folder used for automatic discovery after library scans.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                if (config.updatesFolderUri.isBlank()) "No folder selected"
+                else config.updatesFolderUri,
+                Modifier.padding(vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(
+                onClick = { updatesFolderPicker.launch(null) },
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+            ) {
+                Text("Pick Updates/DLC folder")
+            }
+            if (config.updatesFolderUri.isNotBlank()) {
+                OutlinedButton(
+                    onClick = { update(config.copy(updatesFolderUri = "")) },
+                    Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) {
+                    Text("Clear folder")
+                }
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            SectionTitle("Keys")
             Text(
                 "Import decryption keys and a firmware package. Keys are required to load games.",
                 Modifier.padding(top = 4.dp, bottom = 8.dp),
@@ -149,15 +340,204 @@ fun SettingsScreen(
 }
 
 @Composable
+private fun SectionTitle(text: String) {
+    Text(text, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 4.dp))
+}
+
+@Composable
 private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.padding(end = 12.dp))
+        Text(label, Modifier.weight(1f).padding(end = 12.dp))
         Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 
-private fun memoryModeLabel(mode: Int): String = when (mode) {
-    0 -> "Software page table"
-    1 -> "Host mapped"
-    else -> "Host mapped (unsafe)"
+@Composable
+private fun SliderRow(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onChange: (Float) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(label)
+        Slider(value = value, onValueChange = onChange, valueRange = range)
+    }
+}
+
+@Composable
+private fun IntStepperRow(
+    label: String,
+    value: Int,
+    range: IntRange,
+    step: Int,
+    onChange: (Int) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("$label: $value", Modifier.weight(1f))
+        OutlinedButton(onClick = { onChange((value - step).coerceIn(range)) }) { Text("−") }
+        OutlinedButton(onClick = { onChange((value + step).coerceIn(range)) }) { Text("+") }
+    }
+}
+
+@Composable
+private fun DropdownRow(
+    label: String,
+    valueLabel: String,
+    options: List<Pair<Int, String>>,
+    @Suppress("UNUSED_PARAMETER") selected: Int,
+    onSelect: (Int) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        ) {
+            Text(valueLabel)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (value, text) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = {
+                        onSelect(value)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+private val LANGUAGE_OPTIONS = listOf(
+    0 to "Japanese",
+    1 to "American English",
+    2 to "French",
+    3 to "German",
+    4 to "Italian",
+    5 to "Spanish",
+    6 to "Chinese",
+    7 to "Korean",
+    8 to "Dutch",
+    9 to "Portuguese",
+    10 to "Russian",
+    11 to "Taiwanese",
+    12 to "British English",
+    13 to "Canadian French",
+    14 to "Latin American Spanish",
+    15 to "Simplified Chinese",
+    16 to "Traditional Chinese",
+    17 to "Brazilian Portuguese",
+)
+
+private val REGION_OPTIONS = listOf(
+    0 to "Japan",
+    1 to "USA",
+    2 to "Europe",
+    3 to "Australia",
+    4 to "China",
+    5 to "Korea",
+    6 to "Taiwan",
+)
+
+private val DRAM_OPTIONS = listOf(
+    0 to "4 GiB",
+    1 to "6 GiB",
+    2 to "8 GiB",
+    3 to "12 GiB",
+)
+
+private val MEMORY_MODE_OPTIONS = listOf(
+    0 to "Software page table",
+    1 to "Host mapped",
+    2 to "Host mapped (unsafe)",
+)
+
+private val TIMEZONE_OPTIONS = listOf(
+    0 to "UTC",
+    1 to "America/New_York",
+    2 to "America/Los_Angeles",
+    3 to "Europe/London",
+    4 to "Europe/Paris",
+    5 to "Europe/Berlin",
+    6 to "Asia/Tokyo",
+    7 to "Asia/Shanghai",
+    8 to "Australia/Sydney",
+)
+
+private val RES_SCALE_VALUES = listOf(0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 4f)
+private val RES_SCALE_OPTIONS = RES_SCALE_VALUES.mapIndexed { i, v -> i to "${v}x" }
+
+private val VSYNC_OPTIONS = listOf(
+    0 to "Switch",
+    1 to "Unbounded",
+    2 to "Custom",
+)
+
+private val ASPECT_OPTIONS = listOf(
+    0 to "Fixed 4:3",
+    1 to "Fixed 16:9",
+    2 to "Fixed 16:10",
+    3 to "Fixed 21:9",
+    4 to "Fixed 32:9",
+    5 to "Stretch to window",
+)
+
+private val AA_OPTIONS = listOf(
+    0 to "None",
+    1 to "FXAA",
+    2 to "SMAA Low",
+    3 to "SMAA Medium",
+    4 to "SMAA High",
+    5 to "SMAA Ultra",
+)
+
+private val SCALING_FILTER_OPTIONS = listOf(
+    0 to "Bilinear",
+    1 to "Nearest",
+    2 to "FSR",
+)
+
+private val ANISOTROPY_VALUES = listOf(-1f, 2f, 4f, 8f, 16f)
+private val ANISOTROPY_OPTIONS = listOf(
+    0 to "Auto",
+    1 to "2x",
+    2 to "4x",
+    3 to "8x",
+    4 to "16x",
+)
+
+private val BACKEND_THREADING_OPTIONS = listOf(
+    0 to "Auto",
+    1 to "Off",
+    2 to "On",
+)
+
+private fun languageLabel(v: Int) = LANGUAGE_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
+private fun regionLabel(v: Int) = REGION_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
+private fun dramLabel(v: Int) = DRAM_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
+private fun memoryModeLabel(v: Int) = MEMORY_MODE_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
+private fun vsyncLabel(v: Int) = VSYNC_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
+private fun aspectLabel(v: Int) = ASPECT_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
+private fun aaLabel(v: Int) = AA_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
+private fun scalingFilterLabel(v: Int) = SCALING_FILTER_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
+private fun anisotropyLabel(v: Float) =
+    ANISOTROPY_OPTIONS.getOrNull(anisotropyToIndex(v))?.second ?: v.toString()
+private fun backendThreadingLabel(v: Int) =
+    BACKEND_THREADING_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
+
+private fun resScaleToIndex(scale: Float): Int {
+    val idx = RES_SCALE_VALUES.indexOfFirst { it == scale }
+    return if (idx >= 0) idx else RES_SCALE_VALUES.indexOf(1f).coerceAtLeast(0)
+}
+
+private fun anisotropyToIndex(value: Float): Int {
+    val idx = ANISOTROPY_VALUES.indexOfFirst { it == value }
+    return if (idx >= 0) idx else 0
 }

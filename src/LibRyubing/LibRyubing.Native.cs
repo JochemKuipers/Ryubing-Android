@@ -1,4 +1,6 @@
 using LibRyubing.Input;
+using LibRyubing.Platform;
+using Ryujinx.Common.Configuration;
 using Ryujinx.Common.Logging;
 using System;
 using System.Runtime.InteropServices;
@@ -10,8 +12,6 @@ namespace LibRyubing
     /// the C++/JNI shim (libryubingjni.so) supplies the surface provider and callback
     /// table. Every entry point is wrapped so an exception never propagates across the
     /// native boundary (it is logged and turned into a failure return instead).
-    ///
-    /// Keep this surface minimal and stable — it is the contract with the app layer.
     /// </summary>
     public static unsafe class Native
     {
@@ -23,11 +23,6 @@ namespace LibRyubing
             return Guard(() => AndroidHost.Initialize(Utf8.ToString(appDataPath) ?? "."));
         }
 
-        /// <summary>
-        /// Registers the JNI-provided surface factory:
-        /// <c>(VkInstance handle) -> VkSurfaceKHR handle</c>.
-        /// Must be called before <see cref="LoadApplication"/>.
-        /// </summary>
         [UnmanagedCallersOnly(EntryPoint = "ryubing_set_surface_provider")]
         public static void SetSurfaceProvider(delegate* unmanaged<nint, ulong> createSurface)
         {
@@ -49,7 +44,7 @@ namespace LibRyubing
         public static void SetMemoryConfig(int memoryConfiguration, int memoryManagerMode)
         {
             _settings.MemoryConfiguration = (Ryujinx.HLE.MemoryConfiguration)memoryConfiguration;
-            _settings.MemoryManagerMode = (Ryujinx.Common.Configuration.MemoryManagerMode)memoryManagerMode;
+            _settings.MemoryManagerMode = (MemoryManagerMode)memoryManagerMode;
         }
 
         [UnmanagedCallersOnly(EntryPoint = "ryubing_set_system_config")]
@@ -61,17 +56,74 @@ namespace LibRyubing
             _settings.EnablePtc = enablePtc != 0;
         }
 
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_set_system_config_ex")]
+        public static void SetSystemConfigEx(
+            int enableLowPowerPtc,
+            int enableFsIntegrity,
+            int enableInternet,
+            int ignoreMissingServices,
+            int matchSystemTime,
+            long systemTimeOffset,
+            long tickScalar,
+            byte* timeZone)
+        {
+            _settings.EnableLowPowerPtc = enableLowPowerPtc != 0;
+            _settings.EnableFsIntegrityChecks = enableFsIntegrity != 0;
+            _settings.EnableInternetAccess = enableInternet != 0;
+            _settings.IgnoreMissingServices = ignoreMissingServices != 0;
+            _settings.MatchSystemTime = matchSystemTime != 0;
+            _settings.SystemTimeOffset = systemTimeOffset;
+            _settings.TickScalar = tickScalar <= 0 ? 200 : tickScalar;
+            _settings.TimeZone = Utf8.ToString(timeZone) ?? "UTC";
+        }
+
         [UnmanagedCallersOnly(EntryPoint = "ryubing_set_graphics_config")]
         public static void SetGraphicsConfig(float resScale, int enableShaderCache, int backendThreading)
         {
             _settings.ResScale = resScale;
             _settings.EnableShaderCache = enableShaderCache != 0;
-            _settings.BackendThreading = (Ryujinx.Common.Configuration.BackendThreading)backendThreading;
+            _settings.BackendThreading = (BackendThreading)backendThreading;
         }
 
-        /// <summary>
-        /// libvulkan handle from adrenotools (via JNI). Zero selects the system loader.
-        /// </summary>
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_set_graphics_config_ex")]
+        public static void SetGraphicsConfigEx(
+            int vsyncMode,
+            int customVSyncInterval,
+            int enableCustomVSync,
+            float maxAnisotropy,
+            int aspectRatio,
+            int antiAliasing,
+            int scalingFilter,
+            int scalingFilterLevel,
+            int enableTextureRecompression,
+            int enableMacroHle,
+            int enableColorSpacePassthrough)
+        {
+            _settings.VSyncMode = (VSyncMode)vsyncMode;
+            _settings.CustomVSyncInterval = customVSyncInterval;
+            _settings.EnableCustomVSyncInterval = enableCustomVSync != 0;
+            _settings.MaxAnisotropy = maxAnisotropy;
+            _settings.AspectRatio = (AspectRatio)aspectRatio;
+            _settings.AntiAliasing = (AntiAliasing)antiAliasing;
+            _settings.ScalingFilter = (ScalingFilter)scalingFilter;
+            _settings.ScalingFilterLevel = scalingFilterLevel;
+            _settings.EnableTextureRecompression = enableTextureRecompression != 0;
+            _settings.EnableMacroHLE = enableMacroHle != 0;
+            _settings.EnableColorSpacePassthrough = enableColorSpacePassthrough != 0;
+        }
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_set_audio_volume")]
+        public static void SetAudioVolume(float volume)
+        {
+            _settings.AudioVolume = Math.Clamp(volume, 0f, 1f);
+        }
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_set_enable_file_log")]
+        public static void SetEnableFileLog(int enable)
+        {
+            _settings.EnableFileLog = enable != 0;
+        }
+
         [UnmanagedCallersOnly(EntryPoint = "ryubing_set_vulkan_driver")]
         public static void SetVulkanDriver(long driverHandle)
         {
@@ -92,7 +144,43 @@ namespace LibRyubing
         [UnmanagedCallersOnly(EntryPoint = "ryubing_is_running")]
         public static int IsRunning() => AndroidHost.IsRunning ? 1 : 0;
 
-        // --- System files (keys / firmware) ---
+        // --- Content probing ---
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_query_application_info")]
+        public static int QueryApplicationInfo(byte* path, byte* displayName, byte* outJsonPath)
+        {
+            bool ok = false;
+            Guard(() => ok = AndroidHost.QueryApplicationInfo(
+                Utf8.ToString(path) ?? string.Empty,
+                Utf8.ToString(displayName) ?? string.Empty,
+                Utf8.ToString(outJsonPath) ?? string.Empty));
+            return ok ? 1 : 0;
+        }
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_probe_title_update")]
+        public static int ProbeTitleUpdate(byte* path, byte* displayName, byte* outJsonPath)
+        {
+            bool ok = false;
+            Guard(() => ok = AndroidHost.ProbeTitleUpdate(
+                Utf8.ToString(path) ?? string.Empty,
+                Utf8.ToString(displayName) ?? string.Empty,
+                Utf8.ToString(outJsonPath) ?? string.Empty));
+            return ok ? 1 : 0;
+        }
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_get_dlc_content_list")]
+        public static int GetDlcContentList(byte* path, byte* displayName, ulong titleId, byte* outJsonPath)
+        {
+            bool ok = false;
+            Guard(() => ok = AndroidHost.GetDlcContentList(
+                Utf8.ToString(path) ?? string.Empty,
+                Utf8.ToString(displayName) ?? string.Empty,
+                titleId,
+                Utf8.ToString(outJsonPath) ?? string.Empty));
+            return ok ? 1 : 0;
+        }
+
+        // --- System files ---
 
         [UnmanagedCallersOnly(EntryPoint = "ryubing_reload_keys")]
         public static void ReloadKeys() => Guard(AndroidHost.ReloadKeys);
@@ -105,7 +193,7 @@ namespace LibRyubing
             return ok ? 1 : 0;
         }
 
-        // --- Input injection (called each frame / on input events) ---
+        // --- Input ---
 
         [UnmanagedCallersOnly(EntryPoint = "ryubing_set_button_state")]
         public static void SetButtonState(int buttonMask)
@@ -132,7 +220,36 @@ namespace LibRyubing
             AndroidHost.SetWindowSize(width, height);
         }
 
-        // --- Lifecycle teardown ---
+        // --- Hotkey actions ---
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_toggle_pause")]
+        public static void TogglePause() => Guard(AndroidHost.TogglePause);
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_toggle_mute")]
+        public static void ToggleMute() => Guard(AndroidHost.ToggleMute);
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_adjust_volume")]
+        public static void AdjustVolume(float delta) => Guard(() => AndroidHost.AdjustVolume(delta));
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_toggle_vsync")]
+        public static void ToggleVSync() => Guard(AndroidHost.ToggleVSyncMode);
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_adjust_res_scale")]
+        public static void AdjustResScale(int direction) => Guard(() => AndroidHost.AdjustResScale(direction));
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_adjust_custom_vsync")]
+        public static void AdjustCustomVSync(int direction) => Guard(() => AndroidHost.AdjustCustomVSync(direction));
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_toggle_turbo")]
+        public static void ToggleTurbo() => Guard(AndroidHost.ToggleTurbo);
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_set_turbo_held")]
+        public static void SetTurboHeld(int held) => Guard(() => AndroidHost.SetTurboHeld(held != 0));
+
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_take_screenshot")]
+        public static void TakeScreenshot() => Guard(AndroidHost.TakeScreenshot);
+
+        // --- Lifecycle ---
 
         [UnmanagedCallersOnly(EntryPoint = "ryubing_stop")]
         public static void Stop() => Guard(AndroidHost.Stop);

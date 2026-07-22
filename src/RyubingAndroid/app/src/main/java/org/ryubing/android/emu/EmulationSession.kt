@@ -6,11 +6,13 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.view.Surface
+import org.json.JSONObject
 import org.ryubing.android.R
 import org.ryubing.android.RyubingNative
 import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.EmulatorConfig
 import org.ryubing.android.data.GameEntry
+import org.ryubing.android.input.HotkeyAction
 import org.ryubing.android.input.SwitchButton
 import java.io.File
 import java.io.IOException
@@ -36,6 +38,9 @@ class EmulationSession(
     private var lastWindowWidth = 0
     private var lastWindowHeight = 0
 
+    /** Invoked on the UI thread when the ShowUi hotkey fires. */
+    @Volatile var onShowUiRequested: (() -> Unit)? = null
+
     fun initialize() {
         if (initialized) return
         RyubingNative.ensureLoaded()
@@ -47,8 +52,38 @@ class EmulationSession(
     fun applyConfig(config: EmulatorConfig) {
         RyubingNative.core.apply {
             ryubing_set_memory_config(config.memoryConfiguration, config.memoryManagerMode)
-            ryubing_set_system_config(config.systemLanguage, config.systemRegion, config.dockedMode.toInt(), config.enablePptc.toInt())
+            ryubing_set_system_config(
+                config.systemLanguage,
+                config.systemRegion,
+                config.dockedMode.toInt(),
+                config.enablePptc.toInt(),
+            )
+            ryubing_set_system_config_ex(
+                config.enableLowPowerPtc.toInt(),
+                config.enableFsIntegrity.toInt(),
+                config.enableInternet.toInt(),
+                config.ignoreMissingServices.toInt(),
+                config.matchSystemTime.toInt(),
+                config.systemTimeOffset,
+                config.tickScalar,
+                config.timeZone,
+            )
             ryubing_set_graphics_config(config.resScale, config.enableShaderCache.toInt(), config.backendThreading)
+            ryubing_set_graphics_config_ex(
+                config.vsyncMode,
+                config.customVSyncInterval,
+                config.enableCustomVSync.toInt(),
+                config.maxAnisotropy,
+                config.aspectRatio,
+                config.antiAliasing,
+                config.scalingFilter,
+                config.scalingFilterLevel,
+                config.enableTextureRecompression.toInt(),
+                config.enableMacroHle.toInt(),
+                config.enableColorSpacePassthrough.toInt(),
+            )
+            ryubing_set_audio_volume(config.audioVolume)
+            ryubing_set_enable_file_log(config.enableFileLog.toInt())
         }
     }
 
@@ -102,6 +137,119 @@ class EmulationSession(
         romFd = null
     }
 
+    // --- Content probing (requires initialize()) ---
+
+    data class ApplicationInfo(
+        val titleId: String = "",
+        val titleName: String = "",
+        val version: String = "0",
+        val developer: String = "",
+    )
+
+    data class TitleUpdateInfo(
+        val titleId: String = "",
+        val version: Long = 0,
+        val displayVersion: String = "0",
+        val path: String = "",
+    )
+
+    /**
+     * Probes a ROM path (fd or real filesystem) for base-application metadata.
+     * Blocking — call off the main thread after [initialize].
+     */
+    fun queryApplicationInfo(fdPath: String, displayName: String): ApplicationInfo? {
+        initialize()
+        val out = File(appContext.cacheDir, "query_app_${System.nanoTime()}.json")
+        return try {
+            if (RyubingNative.core.ryubing_query_application_info(fdPath, displayName, out.absolutePath) != 1) {
+                return null
+            }
+            val obj = JSONObject(out.readText())
+            ApplicationInfo(
+                titleId = obj.optString("titleId", ""),
+                titleName = obj.optString("titleName", displayName),
+                version = obj.optString("version", "0"),
+                developer = obj.optString("developer", ""),
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "queryApplicationInfo failed for $displayName", e)
+            null
+        } finally {
+            out.delete()
+        }
+    }
+
+    fun probeTitleUpdate(path: String, displayName: String): TitleUpdateInfo? {
+        initialize()
+        val out = File(appContext.cacheDir, "probe_update_${System.nanoTime()}.json")
+        return try {
+            if (RyubingNative.core.ryubing_probe_title_update(path, displayName, out.absolutePath) != 1) {
+                return null
+            }
+            val obj = JSONObject(out.readText())
+            TitleUpdateInfo(
+                titleId = obj.optString("titleId", ""),
+                version = obj.optLong("version", 0L),
+                displayVersion = obj.optString("displayVersion", "0"),
+                path = obj.optString("path", path),
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "probeTitleUpdate failed for $displayName", e)
+            null
+        } finally {
+            out.delete()
+        }
+    }
+
+    /**
+     * Returns raw DLC container JSON (snake_case list) written by the core, or null.
+     * [titleIdHex] is the base game title ID (16 hex chars).
+     */
+    fun getDlcContentListJson(path: String, displayName: String, titleIdHex: String): String? {
+        initialize()
+        val titleIdLong = titleIdHex.toLongOrNull(16) ?: return null
+        val out = File(appContext.cacheDir, "dlc_list_${System.nanoTime()}.json")
+        return try {
+            if (RyubingNative.core.ryubing_get_dlc_content_list(
+                    path,
+                    displayName,
+                    titleIdLong,
+                    out.absolutePath,
+                ) != 1
+            ) {
+                return null
+            }
+            out.readText()
+        } catch (e: Exception) {
+            Log.e(TAG, "getDlcContentList failed for $displayName", e)
+            null
+        } finally {
+            out.delete()
+        }
+    }
+
+    // --- Hotkeys ---
+
+    fun performHotkey(action: HotkeyAction) {
+        when (action) {
+            HotkeyAction.ToggleVSync -> RyubingNative.core.ryubing_toggle_vsync()
+            HotkeyAction.Screenshot -> RyubingNative.core.ryubing_take_screenshot()
+            HotkeyAction.ShowUi -> onShowUiRequested?.invoke()
+            HotkeyAction.Pause -> RyubingNative.core.ryubing_toggle_pause()
+            HotkeyAction.ToggleMute -> RyubingNative.core.ryubing_toggle_mute()
+            HotkeyAction.ResScaleUp -> RyubingNative.core.ryubing_adjust_res_scale(1)
+            HotkeyAction.ResScaleDown -> RyubingNative.core.ryubing_adjust_res_scale(-1)
+            HotkeyAction.VolumeUp -> RyubingNative.core.ryubing_adjust_volume(0.05f)
+            HotkeyAction.VolumeDown -> RyubingNative.core.ryubing_adjust_volume(-0.05f)
+            HotkeyAction.CustomVSyncInc -> RyubingNative.core.ryubing_adjust_custom_vsync(1)
+            HotkeyAction.CustomVSyncDec -> RyubingNative.core.ryubing_adjust_custom_vsync(-1)
+            HotkeyAction.TurboMode -> RyubingNative.core.ryubing_toggle_turbo()
+        }
+    }
+
+    fun setTurboHeld(held: Boolean) =
+        RyubingNative.core.ryubing_set_turbo_held(held.toInt())
+
     // --- System files (keys / firmware) ---
 
     /**
@@ -142,7 +290,8 @@ class EmulationSession(
         }
     }
 
-    private fun copyUriTo(uri: Uri, dest: File) {
+    fun copyUriTo(uri: Uri, dest: File) {
+        dest.parentFile?.mkdirs()
         (contentResolver.openInputStream(uri) ?: throw IOException("Cannot open $uri")).use { input ->
             dest.outputStream().use { output -> input.copyTo(output) }
         }

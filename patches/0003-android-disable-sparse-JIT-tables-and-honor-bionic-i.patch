@@ -1,20 +1,22 @@
-From 1375efe5d5a81171b8cf6e04e14a39bbb458c243 Mon Sep 17 00:00:00 2001
+From b63e4a19898923671d86c989074e018cef618ff8 Mon Sep 17 00:00:00 2001
 From: Jochem Kuipers <jochem@kuipers.cc>
-Date: Sun, 12 Jul 2026 00:50:55 +0200
-Subject: [PATCH 3/3] android: disable sparse JIT tables and honor bionic in
+Date: Wed, 22 Jul 2026 13:03:02 +0200
+Subject: [PATCH] android: disable sparse JIT tables and honor bionic in
  precise sleep
 
 Ported from Kenji-NX libryujinx_bionic: sparse function tables are off
-when PlatformInfo.IsBionic, and Nanosleep is used for bionic hosts.
+when PlatformInfo.IsBionic (selection now lives in Jit/LightningJit
+CpuContext after mono-jit-v2), and Nanosleep is used for bionic hosts.
 
 Co-authored-by: Cursor <cursoragent@cursor.com>
 ---
- src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs | 6 ++++--
- src/Ryujinx.Cpu/AddressTable.cs                       | 2 +-
- 2 files changed, 5 insertions(+), 3 deletions(-)
+ src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs  | 6 ++++--
+ src/Ryujinx.Cpu/Jit/JitCpuContext.cs                   | 4 +++-
+ src/Ryujinx.Cpu/LightningJit/LightningJitCpuContext.cs | 4 +++-
+ 3 files changed, 10 insertions(+), 4 deletions(-)
 
 diff --git a/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs b/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs
-index 3c30a7f60..60f65f3d4 100644
+index 3c30a7f60..36bac2307 100644
 --- a/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs
 +++ b/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs
 @@ -12,7 +12,8 @@ namespace Ryujinx.Common.PreciseSleep
@@ -33,23 +35,53 @@ index 3c30a7f60..60f65f3d4 100644
  
 -                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
 +                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() ||
-+                OperatingSystem.IsAndroid() || PlatformInfo.IsBionic)
++                    OperatingSystem.IsAndroid() || PlatformInfo.IsBionic)
                  {
                      // Do a nanosleep.
                      now = PerformanceCounter.ElapsedTicks;
-diff --git a/src/Ryujinx.Cpu/AddressTable.cs b/src/Ryujinx.Cpu/AddressTable.cs
-index da58eb0c3..93a45647e 100644
---- a/src/Ryujinx.Cpu/AddressTable.cs
-+++ b/src/Ryujinx.Cpu/AddressTable.cs
-@@ -179,7 +179,7 @@ namespace ARMeilleure.Common
-         public static AddressTable<TEntry> CreateForArm(bool for64Bits, MemoryManagerType type)
-         {
-             // Assume software memory means that we don't want to use any signal handlers.
--            bool sparse = type is not MemoryManagerType.SoftwareMmu and not MemoryManagerType.SoftwarePageTable;
-+            bool sparse = type is not MemoryManagerType.SoftwareMmu and not MemoryManagerType.SoftwarePageTable && PlatformInfo.IsBionic != true;
+diff --git a/src/Ryujinx.Cpu/Jit/JitCpuContext.cs b/src/Ryujinx.Cpu/Jit/JitCpuContext.cs
+index e967b799a..0601fbdaf 100644
+--- a/src/Ryujinx.Cpu/Jit/JitCpuContext.cs
++++ b/src/Ryujinx.Cpu/Jit/JitCpuContext.cs
+@@ -1,6 +1,7 @@
+ using ARMeilleure.Common;
+ using ARMeilleure.Memory;
+ using ARMeilleure.Translation;
++using Ryujinx.Common;
+ using Ryujinx.Cpu.Signal;
  
-             return new AddressTable<TEntry>(AddressTablePresets.GetArmPreset(for64Bits, sparse), sparse);
-         }
+ namespace Ryujinx.Cpu.Jit
+@@ -14,7 +15,8 @@ namespace Ryujinx.Cpu.Jit
+         {
+             _tickSource = tickSource;
+             
+-            bool sparse = memory.Type is not MemoryManagerType.SoftwareMmu and not MemoryManagerType.SoftwarePageTable;
++            // Sparse function tables need signal handlers; disable on bionic.
++            bool sparse = memory.Type is not MemoryManagerType.SoftwareMmu and not MemoryManagerType.SoftwarePageTable && !PlatformInfo.IsBionic;
+             IAddressTable<ulong> functionTable = sparse ? SparseAddressTable<ulong>.CreateForArm(for64Bit) : AddressTable<ulong>.CreateForArm(for64Bit);
+             
+             _translator = new Translator(new JitMemoryAllocator(forJit: true), memory, functionTable);
+diff --git a/src/Ryujinx.Cpu/LightningJit/LightningJitCpuContext.cs b/src/Ryujinx.Cpu/LightningJit/LightningJitCpuContext.cs
+index 185a296e2..7c26ff164 100644
+--- a/src/Ryujinx.Cpu/LightningJit/LightningJitCpuContext.cs
++++ b/src/Ryujinx.Cpu/LightningJit/LightningJitCpuContext.cs
+@@ -1,5 +1,6 @@
+ using ARMeilleure.Common;
+ using ARMeilleure.Memory;
++using Ryujinx.Common;
+ using Ryujinx.Cpu.Jit;
+ using Ryujinx.Cpu.LightningJit.State;
+ 
+@@ -14,7 +15,8 @@ namespace Ryujinx.Cpu.LightningJit
+         {
+             _tickSource = tickSource;
+ 
+-            bool sparse = memory.Type is not MemoryManagerType.SoftwareMmu and not MemoryManagerType.SoftwarePageTable;
++            // Sparse function tables need signal handlers; disable on bionic.
++            bool sparse = memory.Type is not MemoryManagerType.SoftwareMmu and not MemoryManagerType.SoftwarePageTable && !PlatformInfo.IsBionic;
+             IAddressTable<ulong> functionTable = sparse ? SparseAddressTable<ulong>.CreateForArm(for64Bit) : AddressTable<ulong>.CreateForArm(for64Bit);
+             
+             _translator = new Translator(memory, functionTable);
 -- 
 2.55.0
 

@@ -51,7 +51,7 @@ Seven patches ported from [Kenji-NX `libryujinx_bionic`](https://git.ryujinx.app
 |-------|---------|
 | `0001-android-route-bionic-memory-through-Unix-helpers-and.patch` | `PlatformInfo.IsBionic`, Unix memory routing, `ASharedMemory_create` shared memory |
 | `0002-android-host-no-mirror-address-space-fallback-on-bio.patch` | `TryCreateWithoutMirror`, `MemoryManagerHostNoMirror`, `ArmProcessContextFactory` fallback |
-| `0003-android-disable-sparse-JIT-tables-and-honor-bionic-i.patch` | Sparse JIT off on bionic, `PreciseSleepHelper` bionic path |
+| `0003-android-disable-sparse-JIT-tables-and-honor-bionic-i.patch` | Sparse JIT off on bionic (`Jit`/`LightningJit` CpuContext), `PreciseSleepHelper` bionic path |
 | `0004-android-armeilleure-delegate-registry-for-NativeAOT.patch` | NativeAOT-safe JIT helper delegate registry (`Delegates.cs`, helper `#if ANDROID` guards) |
 | `0005-android-bionic-sigaction-layout-and-signal-handler.patch` | Bionic `sigaction` struct layout, siginfo offsets, alternate stack helpers |
 | `0006-android-hoist-ssa-rename-local-functions-for-NativeAOT.patch` | Hoist `Ssa.Rename` nested locals to static methods (NativeAOT codegen fix) |
