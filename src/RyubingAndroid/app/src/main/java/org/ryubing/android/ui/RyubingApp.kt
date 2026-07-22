@@ -18,7 +18,6 @@ import org.ryubing.android.emu.EmulationSession
 sealed interface Screen {
     data object Library : Screen
     data object Settings : Screen
-    data object Drivers : Screen
     data class Emulation(val game: GameEntry) : Screen
 }
 
@@ -43,7 +42,6 @@ fun RyubingApp(
             session = session,
             appDataPath = appDataPath,
             onOpenSettings = { screen = Screen.Settings },
-            onOpenDrivers = { screen = Screen.Drivers },
             onPlay = { screen = Screen.Emulation(it) },
         )
 
@@ -51,14 +49,10 @@ fun RyubingApp(
             repository = settingsRepository,
             mappingRepository = mappingRepository,
             hotkeyRepository = hotkeyRepository,
+            driverRepository = driverRepository,
             session = session,
             onMappingChanged = onControllerMappingChanged,
             onHotkeysChanged = onHotkeysChanged,
-            onBack = { screen = Screen.Library },
-        )
-
-        is Screen.Drivers -> DriverManagerScreen(
-            repository = driverRepository,
             onBack = { screen = Screen.Library },
         )
 

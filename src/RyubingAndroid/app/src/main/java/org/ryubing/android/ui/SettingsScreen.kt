@@ -31,6 +31,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +48,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ryubing.android.R
 import org.ryubing.android.data.ControllerMappingRepository
+import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.EmulatorConfig
 import org.ryubing.android.data.GamepadHotkeyRepository
 import org.ryubing.android.data.SettingsRepository
@@ -59,6 +61,7 @@ private enum class SettingsCategory(val title: String) {
     Audio("Audio"),
     Input("Input"),
     Hotkeys("Hotkeys"),
+    Drivers("GPU Drivers"),
     Content("Content"),
     Keys("Keys"),
 }
@@ -69,6 +72,7 @@ fun SettingsScreen(
     repository: SettingsRepository,
     mappingRepository: ControllerMappingRepository,
     hotkeyRepository: GamepadHotkeyRepository,
+    driverRepository: DriverRepository,
     session: EmulationSession,
     onMappingChanged: () -> Unit,
     onHotkeysChanged: () -> Unit,
@@ -76,12 +80,17 @@ fun SettingsScreen(
 ) {
     var config by remember { mutableStateOf(repository.load()) }
     var category by remember { mutableStateOf<SettingsCategory?>(null) }
+    var showDriverFetcher by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     fun update(newConfig: EmulatorConfig) {
         config = newConfig
         repository.save(newConfig)
+    }
+
+    LaunchedEffect(category) {
+        if (category != SettingsCategory.Drivers) showDriverFetcher = false
     }
 
     val keysPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -125,7 +134,11 @@ fun SettingsScreen(
     }
 
     BackHandler(enabled = category != null) {
-        category = null
+        if (category == SettingsCategory.Drivers && showDriverFetcher) {
+            showDriverFetcher = false
+        } else {
+            category = null
+        }
     }
 
     Scaffold(
@@ -133,13 +146,22 @@ fun SettingsScreen(
             TopAppBar(
                 title = {
                     Text(
-                        category?.title ?: stringResource(R.string.settings_title),
+                        when {
+                            category == SettingsCategory.Drivers && showDriverFetcher ->
+                                "Download drivers"
+                            else -> category?.title ?: stringResource(R.string.settings_title)
+                        },
                     )
                 },
                 navigationIcon = {
                     IconButton(
                         onClick = {
-                            if (category != null) category = null else onBack()
+                            when {
+                                category == SettingsCategory.Drivers && showDriverFetcher ->
+                                    showDriverFetcher = false
+                                category != null -> category = null
+                                else -> onBack()
+                            }
                         },
                     ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -171,6 +193,19 @@ fun SettingsScreen(
                     hotkeyRepository = hotkeyRepository,
                     onHotkeysChanged = onHotkeysChanged,
                 )
+                SettingsCategory.Drivers -> {
+                    if (showDriverFetcher) {
+                        DriverFetcherPanel(
+                            repository = driverRepository,
+                            onInstalled = { showDriverFetcher = false },
+                        )
+                    } else {
+                        DriversPanel(
+                            repository = driverRepository,
+                            onOpenFetcher = { showDriverFetcher = true },
+                        )
+                    }
+                }
                 SettingsCategory.Content -> ContentSettingsPage(
                     config = config,
                     onUpdate = ::update,

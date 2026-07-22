@@ -15,7 +15,7 @@ import java.util.zip.ZipInputStream
 
 /**
  * Persists imported Turnip driver packages and the user's active selection.
- * Driver zips are extracted into [Context.filesDir]/drivers/&lt;id&gt;/ (Kenji/Turnip layout:
+ * Driver zips are extracted under app filesDir/drivers/<id>/ (Kenji/Turnip layout:
  * meta.json + the driver .so) so adrenotools can load them on the next launch.
  */
 class DriverRepository(private val context: Context) {
@@ -47,8 +47,29 @@ class DriverRepository(private val context: Context) {
         return findDriver(id) ?: systemDriver(systemDisplayName)
     }
 
-    fun saveSelectedId(id: String) {
+    fun saveSelectedId(id: String): Boolean {
+        val previous = loadSelectedId()
+        if (previous == id) return false
         prefs.edit { putString(KEY_SELECTED_ID, id) }
+        // Disk shader caches are driver-specific (Eden wipes them on driver change).
+        clearAllShaderCaches()
+        return true
+    }
+
+    /**
+     * Deletes every title's games/.../cache/shader directory under filesDir.
+     * Matches Eden's wipe on Vulkan driver switch so pipelines aren't reused across drivers.
+     */
+    fun clearAllShaderCaches() {
+        val gamesDir = File(context.filesDir, "games")
+        if (!gamesDir.isDirectory) return
+        gamesDir.listFiles()?.forEach { titleDir ->
+            if (!titleDir.isDirectory) return@forEach
+            val shaderDir = File(titleDir, "cache/shader")
+            if (shaderDir.exists()) {
+                runCatching { shaderDir.deleteRecursively() }
+            }
+        }
     }
 
     /**
@@ -89,8 +110,22 @@ class DriverRepository(private val context: Context) {
 
     @Throws(IOException::class)
     fun importDriver(uri: Uri): GpuDriver {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            return importDriverStream(input, resolveDisplayName(uri))
+        } ?: throw IOException("Cannot open $uri")
+    }
+
+    @Throws(IOException::class)
+    fun importDriver(file: File): GpuDriver {
+        if (!file.isFile) throw IOException("Driver file missing: ${file.absolutePath}")
+        file.inputStream().use { input ->
+            return importDriverStream(input, file.name.removeSuffix(".zip").ifBlank { "Downloaded driver" })
+        }
+    }
+
+    @Throws(IOException::class)
+    private fun importDriverStream(input: java.io.InputStream, fallbackName: String): GpuDriver {
         val id = UUID.randomUUID().toString()
-        val fallbackName = resolveDisplayName(uri)
         val extractDir = File(driversRoot, id)
 
         if (extractDir.exists()) {
@@ -98,24 +133,22 @@ class DriverRepository(private val context: Context) {
         }
         extractDir.mkdirs()
 
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            ZipInputStream(input).use { zip ->
-                var entry = zip.nextEntry
-                while (entry != null) {
-                    val outFile = File(extractDir, entry.name)
-                    if (entry.isDirectory) {
-                        outFile.mkdirs()
-                    } else {
-                        outFile.parentFile?.mkdirs()
-                        BufferedOutputStream(FileOutputStream(outFile)).use { bos ->
-                            zip.copyTo(bos)
-                        }
+        ZipInputStream(input).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                val outFile = File(extractDir, entry.name)
+                if (entry.isDirectory) {
+                    outFile.mkdirs()
+                } else {
+                    outFile.parentFile?.mkdirs()
+                    BufferedOutputStream(FileOutputStream(outFile)).use { bos ->
+                        zip.copyTo(bos)
                     }
-                    zip.closeEntry()
-                    entry = zip.nextEntry
                 }
+                zip.closeEntry()
+                entry = zip.nextEntry
             }
-        } ?: throw IOException("Cannot open $uri")
+        }
 
         val meta = readMetadata(extractDir, fallbackName)
         val libraryName = meta.libraryName
@@ -144,6 +177,7 @@ class DriverRepository(private val context: Context) {
         File(driversRoot, id).deleteRecursively()
         persistImportedDrivers(parseImportedDrivers().filterNot { it.id == id })
         if (loadSelectedId() == id) {
+            // Falling back to system is a driver change — wipe caches.
             saveSelectedId(GpuDriver.SYSTEM_ID)
         }
     }

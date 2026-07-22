@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
@@ -58,7 +57,6 @@ fun GameLibraryScreen(
     session: EmulationSession,
     appDataPath: String,
     onOpenSettings: () -> Unit,
-    onOpenDrivers: () -> Unit,
     onPlay: (GameEntry) -> Unit,
 ) {
     var games by remember { mutableStateOf(repository.scanGames()) }
@@ -139,9 +137,6 @@ fun GameLibraryScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.library_title)) },
                 actions = {
-                    IconButton(onClick = onOpenDrivers) {
-                        Icon(Icons.Filled.Memory, contentDescription = stringResource(R.string.drivers_title))
-                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.settings_title))
                     }
