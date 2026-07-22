@@ -8,15 +8,32 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -26,6 +43,7 @@ import kotlinx.coroutines.launch
 import org.ryubing.android.data.EmulatorConfig
 import org.ryubing.android.data.GameEntry
 import org.ryubing.android.emu.EmulationSession
+import org.ryubing.android.input.MotionSensorManager
 
 /**
  * The in-game screen: a SurfaceView the emulator renders into (Vulkan swapchain bound to
@@ -41,6 +59,28 @@ fun EmulationScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val showTouchOverlay = remember { mutableStateOf(config.showTouchControls) }
+    var showExitMenu by remember { mutableStateOf(false) }
+
+    fun openExitMenu() {
+        if (showExitMenu) return
+        showExitMenu = true
+        session.setPaused(true)
+    }
+
+    fun resumeGame() {
+        if (!showExitMenu) return
+        showExitMenu = false
+        session.setPaused(false)
+    }
+
+    fun exitToLibrary() {
+        showExitMenu = false
+        onExit()
+    }
+
+    BackHandler {
+        if (showExitMenu) resumeGame() else openExitMenu()
+    }
 
     DisposableEffect(Unit) {
         val activity = context as? ComponentActivity
@@ -62,10 +102,17 @@ fun EmulationScreen(
             showTouchOverlay.value = !showTouchOverlay.value
         }
 
+        val motion = if (config.enableMotion) {
+            MotionSensorManager(context, session::setMotion).also { it.register() }
+        } else {
+            null
+        }
+
         onDispose {
+            motion?.release()
             session.onShowUiRequested = null
-            session.stop()
-            session.setSurface(null)
+            // Stop off the main thread — native Stop joins the GPU loop and ANRs if sync here.
+            session.stopAsync()
             activity?.let { host ->
                 insetsController?.show(WindowInsetsCompat.Type.systemBars())
                 WindowCompat.setDecorFitsSystemWindows(host.window, true)
@@ -99,7 +146,8 @@ fun EmulationScreen(
                         }
 
                         override fun surfaceDestroyed(holder: SurfaceHolder) {
-                            session.stop()
+                            // Don't stop emulation here — that blocks the main thread (ANR).
+                            // Tear-down runs asynchronously from DisposableEffect.onDispose.
                             session.setSurface(null)
                         }
                     })
@@ -107,12 +155,52 @@ fun EmulationScreen(
             },
         )
 
-        if (showTouchOverlay.value) {
+        if (showTouchOverlay.value && !showExitMenu) {
             TouchControls(
                 modifier = Modifier.fillMaxSize(),
+                useSwitchLayout = config.useSwitchLayout,
+                scale = config.touchControlsScale,
+                stickSensitivity = config.touchStickSensitivity,
+                opacity = config.touchControlsOpacity,
+                showRightStick = config.showTouchRightStick,
+                invertStickY = config.touchInvertStickY,
                 onButton = session::setButton,
                 onStick = session::setStick,
             )
+        }
+
+        if (showExitMenu) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.55f)),
+            ) {
+                Column(
+                    Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxHeight()
+                        .widthIn(max = 280.dp)
+                        .fillMaxWidth(0.4f)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+                ) {
+                    Text(game.title, style = MaterialTheme.typography.titleMedium)
+                    Text("Paused", style = MaterialTheme.typography.bodySmall)
+                    Button(
+                        onClick = ::resumeGame,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Resume")
+                    }
+                    OutlinedButton(
+                        onClick = ::exitToLibrary,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Exit to library")
+                    }
+                }
+            }
         }
     }
 }

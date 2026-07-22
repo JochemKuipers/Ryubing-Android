@@ -8,6 +8,7 @@ using Ryujinx.Common.Configuration;
 using Ryujinx.Common.Configuration.Multiplayer;
 using Ryujinx.Common.Logging;
 using Ryujinx.Common.Logging.Targets;
+using Ryujinx.Common.Utilities;
 using Ryujinx.Cpu;
 using Ryujinx.Graphics.GAL;
 using Ryujinx.Graphics.GAL.Multithreading;
@@ -21,9 +22,12 @@ using Ryujinx.HLE.HOS.SystemState;
 using Ryujinx.Input;
 using Ryujinx.Input.HLE;
 using Silk.NET.Vulkan;
+using SkiaSharp;
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using ARMeilleure;
 
 namespace LibRyubing
@@ -52,9 +56,12 @@ namespace LibRyubing
         private static Thread _gpuThread;
         private static CancellationTokenSource _gpuCancellation;
         private static VulkanLoader _vulkanLoader;
+        private static readonly object LifecycleLock = new();
 
         private static volatile bool _isActive;
         private static volatile bool _isStopped;
+        private static volatile bool _screenshotRequested;
+        private static readonly object _screenshotLock = new();
         private static float _volumeBeforeMute = 1f;
         private static bool _emulationPaused;
 
@@ -219,6 +226,7 @@ namespace LibRyubing
                     _uiHandler);
 
             _device = new Switch(configuration);
+            _device.Gpu.Renderer.ScreenCaptured += OnScreenCaptured;
 
             // Apply present-time graphics window settings after the renderer exists.
             _device.Gpu.Renderer.Window.SetAntiAliasing(settings.AntiAliasing);
@@ -410,6 +418,12 @@ namespace LibRyubing
                             });
                         }
 
+                        if (_screenshotRequested)
+                        {
+                            _screenshotRequested = false;
+                            _device.Gpu.Renderer.Screenshot();
+                        }
+
                         if (ticks >= ticksPerFrame)
                         {
                             ticks = Math.Min(ticks - ticksPerFrame, ticksPerFrame);
@@ -468,7 +482,17 @@ namespace LibRyubing
                 return;
             }
 
-            _emulationPaused = !_emulationPaused;
+            SetPaused(!_emulationPaused);
+        }
+
+        public static void SetPaused(bool paused)
+        {
+            if (_device == null || _emulationPaused == paused)
+            {
+                return;
+            }
+
+            _emulationPaused = paused;
             _device.System.TogglePauseEmulation(_emulationPaused);
         }
 
@@ -560,23 +584,101 @@ namespace LibRyubing
 
         public static void TakeScreenshot()
         {
-            _uiHandler?.TakeScreenshot();
+            _screenshotRequested = true;
         }
 
-        /// <summary>Stops emulation and disposes the current device. Blocks until the GPU thread exits.</summary>
+        private static void OnScreenCaptured(object sender, ScreenCaptureImageInfo e)
+        {
+            if (e.Data.Length <= 0 || e.Height <= 0 || e.Width <= 0)
+            {
+                Logger.Error?.Print(LogClass.Application, $"Screenshot is empty. Size : {e.Data.Length} bytes. Resolution : {e.Width}x{e.Height}", "Screenshot");
+                return;
+            }
+
+            Task.Run(() =>
+            {
+                lock (_screenshotLock)
+                {
+                    string applicationName = _device?.Processes?.ActiveApplication?.Name ?? "screenshot";
+                    string sanitized = FileSystemUtils.SanitizeFileName(applicationName);
+                    DateTime now = DateTime.Now;
+                    string filename = $"{sanitized}_{now.Year}-{now.Month:D2}-{now.Day:D2}_{now.Hour:D2}-{now.Minute:D2}-{now.Second:D2}.png";
+                    string directory = Path.Combine(AppDataManager.BaseDirPath, "screenshots");
+                    string path = Path.Combine(directory, filename);
+
+                    try
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error?.Print(LogClass.Application, $"Failed to create screenshots dir: {ex.GetType().Name}", "Screenshot");
+                        return;
+                    }
+
+                    SKColorType colorType = e.IsBgra ? SKColorType.Bgra8888 : SKColorType.Rgba8888;
+                    using SKBitmap bitmap = new(new SKImageInfo(e.Width, e.Height, colorType, SKAlphaType.Premul));
+                    Marshal.Copy(e.Data, 0, bitmap.GetPixels(), e.Data.Length);
+
+                    using SKBitmap bitmapToSave = new(bitmap.Width, bitmap.Height);
+                    using SKCanvas canvas = new(bitmapToSave);
+                    canvas.Clear(SKColors.Black);
+                    float scaleX = e.FlipX ? -1 : 1;
+                    float scaleY = e.FlipY ? -1 : 1;
+                    canvas.SetMatrix(SKMatrix.CreateScale(scaleX, scaleY, bitmap.Width / 2f, bitmap.Height / 2f));
+                    canvas.DrawBitmap(bitmap, SKPoint.Empty);
+
+                    using SKData data = bitmapToSave.Encode(SKEncodedImageFormat.Png, 100);
+                    using FileStream stream = File.OpenWrite(path);
+                    data.SaveTo(stream);
+
+                    Logger.Notice.Print(LogClass.Application, $"Screenshot saved to '{path}'.", "Screenshot");
+                }
+            });
+        }
+
+        /// <summary>Stops emulation and disposes the current device. Safe to call repeatedly.</summary>
         public static void Stop()
         {
-            RequestStop();
+            lock (LifecycleLock)
+            {
+                RequestStop();
 
-            _gpuThread?.Join(TimeSpan.FromSeconds(5));
-            _gpuThread = null;
+                Thread gpu = _gpuThread;
+                _gpuThread = null;
+                if (gpu != null && gpu.IsAlive && gpu != Thread.CurrentThread)
+                {
+                    // Keep this short — callers may be on Android's main thread via JNI.
+                    if (!gpu.Join(TimeSpan.FromMilliseconds(1500)))
+                    {
+                        Logger.Warning?.Print(LogClass.Application, "GPU thread did not exit within 1.5s");
+                    }
+                }
 
-            _npadManager?.Dispose();
-            _npadManager = null;
+                try
+                {
+                    _npadManager?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warning?.Print(LogClass.Application, $"Npad dispose: {ex.Message}");
+                }
 
-            _device?.Dispose();
-            _device = null;
-            _emulationPaused = false;
+                _npadManager = null;
+
+                try
+                {
+                    _device?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warning?.Print(LogClass.Application, $"Device dispose: {ex.Message}");
+                }
+
+                _device = null;
+                _emulationPaused = false;
+                _screenshotRequested = false;
+            }
         }
 
         public static void Shutdown()

@@ -167,12 +167,28 @@ fun SettingsScreen(
             SwitchRow("Match system time", config.matchSystemTime) {
                 update(config.copy(matchSystemTime = it))
             }
+            if (!config.matchSystemTime) {
+                IntStepperRow(
+                    label = "Time offset (hours)",
+                    value = (config.systemTimeOffset / 3600L).toInt().coerceIn(-24, 24),
+                    range = -24..24,
+                    step = 1,
+                    onChange = { update(config.copy(systemTimeOffset = it.toLong() * 3600L)) },
+                )
+            }
             DropdownRow(
                 label = "Time zone",
                 valueLabel = config.timeZone,
                 options = TIMEZONE_OPTIONS,
                 selected = TIMEZONE_OPTIONS.indexOfFirst { it.second == config.timeZone }.coerceAtLeast(0),
                 onSelect = { update(config.copy(timeZone = TIMEZONE_OPTIONS[it].second)) },
+            )
+            IntStepperRow(
+                label = "Tick scalar (%)",
+                value = config.tickScalar.toInt().coerceIn(50, 400),
+                range = 50..400,
+                step = 10,
+                onChange = { update(config.copy(tickScalar = it.toLong())) },
             )
             SwitchRow("File logging", config.enableFileLog) {
                 update(config.copy(enableFileLog = it))
@@ -277,6 +293,38 @@ fun SettingsScreen(
             }
             SwitchRow("On-screen touch controls", config.showTouchControls) {
                 update(config.copy(showTouchControls = it))
+            }
+            if (config.showTouchControls) {
+                SliderRow(
+                    label = "Touch overlay scale: ${(config.touchControlsScale * 100).roundToInt()}%",
+                    value = config.touchControlsScale,
+                    range = 0.5f..1.5f,
+                    onChange = { update(config.copy(touchControlsScale = it)) },
+                )
+                SliderRow(
+                    label = "Touch stick sensitivity: ${"%.2f".format(config.touchStickSensitivity)}",
+                    value = config.touchStickSensitivity,
+                    range = 0.25f..2f,
+                    onChange = { update(config.copy(touchStickSensitivity = it)) },
+                )
+                SliderRow(
+                    label = "Touch overlay opacity: ${(config.touchControlsOpacity * 100).roundToInt()}%",
+                    value = config.touchControlsOpacity,
+                    range = 0.15f..1f,
+                    onChange = { update(config.copy(touchControlsOpacity = it)) },
+                )
+                SwitchRow("Show right stick", config.showTouchRightStick) {
+                    update(config.copy(showTouchRightStick = it))
+                }
+                SwitchRow("Invert touch stick Y", config.touchInvertStickY) {
+                    update(config.copy(touchInvertStickY = it))
+                }
+                SwitchRow("Switch controller layout", config.useSwitchLayout) {
+                    update(config.copy(useSwitchLayout = it))
+                }
+            }
+            SwitchRow("Motion sensor", config.enableMotion) {
+                update(config.copy(enableMotion = it))
             }
 
             HorizontalDivider(Modifier.padding(vertical = 12.dp))

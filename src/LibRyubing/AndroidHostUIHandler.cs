@@ -100,10 +100,6 @@ namespace LibRyubing
             return _accountManager?.LastOpenedUser;
         }
 
-        public void TakeScreenshot()
-        {
-            // Screenshot capture is handled on the Kotlin side from the surface;
-            // nothing to do in the managed host for now.
-        }
+        public void TakeScreenshot() => AndroidHost.TakeScreenshot();
     }
 }

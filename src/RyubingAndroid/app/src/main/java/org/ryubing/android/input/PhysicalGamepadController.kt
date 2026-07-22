@@ -21,6 +21,7 @@ class PhysicalGamepadController(
     private var mappingHolder: ControllerMapping = mapping
     private var hotkeysHolder: GamepadHotkeyMapping = hotkeys
     private var turboHeldActive = false
+    private val heldKeys = mutableSetOf<Int>()
 
     fun updateMapping(mapping: ControllerMapping) {
         leftTriggerPressed = false
@@ -40,36 +41,45 @@ class PhysicalGamepadController(
         if (ControllerKeyCapture.isActive) return false
         if ((event.flags and KeyEvent.FLAG_FALLBACK) != 0) return false
 
-        val hotkey = hotkeysHolder.actionForKey(event.keyCode)
-        if (hotkey != null) {
-            when (event.action) {
-                KeyEvent.ACTION_DOWN -> {
-                    if (event.repeatCount > 0) return true
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                if (event.repeatCount > 0) {
+                    heldKeys.add(event.keyCode)
+                    return mappingHolder.switchButtonForKey(event.keyCode) != null
+                }
+                val hotkey = hotkeysHolder.actionForPress(event.keyCode, heldKeys)
+                heldKeys.add(event.keyCode)
+                if (hotkey != null) {
                     if (hotkey == HotkeyAction.TurboMode && hotkeysHolder.turboModeWhileHeld) {
                         turboHeldActive = true
                         session.setTurboHeld(true)
                     } else {
                         session.performHotkey(hotkey)
                     }
+                    return true
                 }
-                KeyEvent.ACTION_UP -> {
-                    if (hotkey == HotkeyAction.TurboMode && hotkeysHolder.turboModeWhileHeld) {
+                val button = mappingHolder.switchButtonForKey(event.keyCode) ?: return false
+                session.setButton(button, true)
+                return true
+            }
+            KeyEvent.ACTION_UP -> {
+                heldKeys.remove(event.keyCode)
+                if (turboHeldActive) {
+                    val turbo = hotkeysHolder.bindingFor(HotkeyAction.TurboMode)
+                    if (event.keyCode == turbo.keyCode ||
+                        (turbo.modifierKeyCode != KeyEvent.KEYCODE_UNKNOWN &&
+                            event.keyCode == turbo.modifierKeyCode)
+                    ) {
                         turboHeldActive = false
                         session.setTurboHeld(false)
                     }
                 }
-                else -> return false
+                val button = mappingHolder.switchButtonForKey(event.keyCode) ?: return false
+                session.setButton(button, false)
+                return true
             }
-            return true
-        }
-
-        val button = mappingHolder.switchButtonForKey(event.keyCode) ?: return false
-        when (event.action) {
-            KeyEvent.ACTION_DOWN -> session.setButton(button, true)
-            KeyEvent.ACTION_UP -> session.setButton(button, false)
             else -> return false
         }
-        return true
     }
 
     fun onMotionEvent(event: MotionEvent) {

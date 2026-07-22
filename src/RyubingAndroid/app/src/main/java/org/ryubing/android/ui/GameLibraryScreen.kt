@@ -78,13 +78,45 @@ fun GameLibraryScreen(
                     session.initialize()
                     val enriched = repository.enrichGames(scanned, session)
                     withContext(Dispatchers.Main) { games = enriched }
+
                     if (settings.updatesFolderUri.isNotBlank()) {
-                        ContentAutoloader(context, appDataPath, session)
-                            .autoload(settings.updatesFolderUri, enriched)
+                        if (enriched.none { it.titleId.isNotBlank() }) {
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(
+                                    context,
+                                    "Autoload skipped — no title IDs (install keys and refresh)",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        } else {
+                            val (updates, dlc) = ContentAutoloader(context, appDataPath, session)
+                                .autoload(settings.updatesFolderUri, enriched)
+                            withContext(Dispatchers.Main) {
+                                val msg = if (updates > 0 || dlc > 0) {
+                                    "Autoloaded $updates update(s), $dlc DLC"
+                                } else {
+                                    "No new updates/DLC matched library titles"
+                                }
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     }
-                } catch (_: Throwable) {
+
+                    val detailed = repository.applyContentMetadata(enriched, appDataPath, session)
+                    withContext(Dispatchers.Main) { games = detailed }
+                } catch (e: Throwable) {
+                    android.util.Log.e("GameLibrary", "Library refresh failed", e)
                 }
             }
+        }
+    }
+
+    fun refreshContentDetails() {
+        scope.launch {
+            val detailed = withContext(Dispatchers.IO) {
+                repository.applyContentMetadata(games, appDataPath, session)
+            }
+            games = detailed
         }
     }
 
@@ -143,14 +175,30 @@ fun GameLibraryScreen(
                             Column(Modifier.padding(16.dp)) {
                                 Text(game.title)
                                 val subtitle = buildString {
-                                    append("${game.sizeBytes / (1024 * 1024)} MiB")
                                     if (game.titleId.isNotBlank()) {
-                                        append(" · ")
                                         append(game.titleId)
                                     }
                                     if (game.version.isNotBlank() && game.version != "0") {
-                                        append(" · v")
+                                        if (isNotEmpty()) append(" · ")
+                                        append("v")
                                         append(game.version)
+                                        if (game.hasSelectedUpdate) append(" (update)")
+                                    }
+                                    if (game.updateCount > 0) {
+                                        if (isNotEmpty()) append(" · ")
+                                        append(game.updateCount)
+                                        append(if (game.updateCount == 1) " update" else " updates")
+                                    }
+                                    if (game.dlcCount > 0) {
+                                        if (isNotEmpty()) append(" · ")
+                                        append(game.dlcCount)
+                                        append(" DLC")
+                                    }
+                                    if (isEmpty()) {
+                                        append("${game.sizeBytes / (1024 * 1024)} MiB")
+                                    } else {
+                                        append(" · ")
+                                        append("${game.sizeBytes / (1024 * 1024)} MiB")
                                     }
                                 }
                                 Text(subtitle)
@@ -208,7 +256,10 @@ fun GameLibraryScreen(
             gameTitle = game.title,
             appDataPath = appDataPath,
             session = session,
-            onDismiss = { manageUpdatesFor = null },
+            onDismiss = {
+                manageUpdatesFor = null
+                refreshContentDetails()
+            },
         )
     }
 
@@ -218,7 +269,10 @@ fun GameLibraryScreen(
             gameTitle = game.title,
             appDataPath = appDataPath,
             session = session,
-            onDismiss = { manageDlcFor = null },
+            onDismiss = {
+                manageDlcFor = null
+                refreshContentDetails()
+            },
         )
     }
 }

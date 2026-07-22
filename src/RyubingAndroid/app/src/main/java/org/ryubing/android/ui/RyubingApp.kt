@@ -79,7 +79,7 @@ fun RyubingApp(
             session = session,
             config = settingsRepository.load(),
             onExit = {
-                session.stop()
+                // Navigate first — stop is async in EmulationScreen.dispose to avoid ANR.
                 screen = Screen.Library
             },
         )

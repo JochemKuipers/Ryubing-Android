@@ -44,6 +44,12 @@ class SettingsRepository(context: Context) {
         audioVolume = prefs.getFloat(KEY_AUDIO_VOLUME, 1f),
         useSwitchLayout = prefs.getBoolean(KEY_SWITCH_LAYOUT, true),
         showTouchControls = prefs.getBoolean(KEY_TOUCH_CONTROLS, true),
+        touchControlsScale = prefs.getFloat(KEY_TOUCH_SCALE, 1f).coerceIn(0.5f, 1.5f),
+        touchStickSensitivity = prefs.getFloat(KEY_TOUCH_STICK_SENS, 1f).coerceIn(0.25f, 2f),
+        touchControlsOpacity = prefs.getFloat(KEY_TOUCH_OPACITY, 0.4f).coerceIn(0.15f, 1f),
+        showTouchRightStick = prefs.getBoolean(KEY_TOUCH_RIGHT_STICK, true),
+        touchInvertStickY = prefs.getBoolean(KEY_TOUCH_INVERT_STICK_Y, false),
+        enableMotion = prefs.getBoolean(KEY_ENABLE_MOTION, true),
         updatesFolderUri = prefs.getString(KEY_UPDATES_FOLDER_URI, "") ?: "",
     )
 
@@ -80,6 +86,12 @@ class SettingsRepository(context: Context) {
         putFloat(KEY_AUDIO_VOLUME, config.audioVolume)
         putBoolean(KEY_SWITCH_LAYOUT, config.useSwitchLayout)
         putBoolean(KEY_TOUCH_CONTROLS, config.showTouchControls)
+        putFloat(KEY_TOUCH_SCALE, config.touchControlsScale)
+        putFloat(KEY_TOUCH_STICK_SENS, config.touchStickSensitivity)
+        putFloat(KEY_TOUCH_OPACITY, config.touchControlsOpacity)
+        putBoolean(KEY_TOUCH_RIGHT_STICK, config.showTouchRightStick)
+        putBoolean(KEY_TOUCH_INVERT_STICK_Y, config.touchInvertStickY)
+        putBoolean(KEY_ENABLE_MOTION, config.enableMotion)
         putString(KEY_UPDATES_FOLDER_URI, config.updatesFolderUri)
     }
 
@@ -116,6 +128,12 @@ class SettingsRepository(context: Context) {
         const val KEY_AUDIO_VOLUME = "audio_volume"
         const val KEY_SWITCH_LAYOUT = "switch_layout"
         const val KEY_TOUCH_CONTROLS = "touch_controls"
+        const val KEY_TOUCH_SCALE = "touch_scale"
+        const val KEY_TOUCH_STICK_SENS = "touch_stick_sens"
+        const val KEY_TOUCH_OPACITY = "touch_opacity"
+        const val KEY_TOUCH_RIGHT_STICK = "touch_right_stick"
+        const val KEY_TOUCH_INVERT_STICK_Y = "touch_invert_stick_y"
+        const val KEY_ENABLE_MOTION = "enable_motion"
         const val KEY_UPDATES_FOLDER_URI = "updates_folder_uri"
     }
 }

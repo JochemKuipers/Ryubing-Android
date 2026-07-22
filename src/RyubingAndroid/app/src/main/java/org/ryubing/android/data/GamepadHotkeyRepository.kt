@@ -6,14 +6,22 @@ import androidx.core.content.edit
 import org.json.JSONObject
 import org.ryubing.android.input.GamepadHotkeyMapping
 import org.ryubing.android.input.HotkeyAction
+import org.ryubing.android.input.HotkeyBinding
 
 class GamepadHotkeyRepository(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun load(): GamepadHotkeyMapping {
-        val json = prefs.getString(KEY_MAPPING, null) ?: return GamepadHotkeyMapping()
-        return runCatching { decode(json) }.getOrElse { GamepadHotkeyMapping() }
+        val json = prefs.getString(KEY_MAPPING, null)
+            ?: prefs.getString(KEY_MAPPING_LEGACY, null)
+            ?: return GamepadHotkeyMapping()
+        val mapping = runCatching { decode(json) }.getOrElse { GamepadHotkeyMapping() }
+        // Migrate legacy single-key prefs into v2.
+        if (!prefs.contains(KEY_MAPPING) && prefs.contains(KEY_MAPPING_LEGACY)) {
+            save(mapping)
+        }
+        return mapping
     }
 
     fun save(mapping: GamepadHotkeyMapping) {
@@ -28,8 +36,13 @@ class GamepadHotkeyRepository(context: Context) {
 
     private fun encode(mapping: GamepadHotkeyMapping): String {
         val obj = JSONObject()
-        mapping.bindings.forEach { (action, keyCode) ->
-            obj.put(action.name, keyCode)
+        mapping.bindings.forEach { (action, binding) ->
+            obj.put(
+                action.name,
+                JSONObject()
+                    .put("key", binding.keyCode)
+                    .put("mod", binding.modifierKeyCode),
+            )
         }
         obj.put("turboModeWhileHeld", mapping.turboModeWhileHeld)
         return obj.toString()
@@ -37,12 +50,19 @@ class GamepadHotkeyRepository(context: Context) {
 
     private fun decode(json: String): GamepadHotkeyMapping {
         val obj = JSONObject(json)
-        val bindings = mutableMapOf<HotkeyAction, Int>()
+        val bindings = mutableMapOf<HotkeyAction, HotkeyBinding>()
         for (action in HotkeyAction.entries) {
-            bindings[action] = if (obj.has(action.name)) {
-                obj.getInt(action.name)
-            } else {
-                KeyEvent.KEYCODE_UNKNOWN
+            bindings[action] = when {
+                !obj.has(action.name) -> HotkeyBinding()
+                obj.opt(action.name) is JSONObject -> {
+                    val b = obj.getJSONObject(action.name)
+                    HotkeyBinding(
+                        keyCode = b.optInt("key", KeyEvent.KEYCODE_UNKNOWN),
+                        modifierKeyCode = b.optInt("mod", KeyEvent.KEYCODE_UNKNOWN),
+                    )
+                }
+                // Legacy hotkeys_v1: bare key code int
+                else -> HotkeyBinding(keyCode = obj.optInt(action.name, KeyEvent.KEYCODE_UNKNOWN))
             }
         }
         return GamepadHotkeyMapping(
@@ -53,6 +73,7 @@ class GamepadHotkeyRepository(context: Context) {
 
     private companion object {
         const val PREFS_NAME = "ryubing_hotkeys"
-        const val KEY_MAPPING = "hotkeys_v1"
+        const val KEY_MAPPING = "hotkeys_v2"
+        const val KEY_MAPPING_LEGACY = "hotkeys_v1"
     }
 }

@@ -16,7 +16,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using System.Text.Json;
 using ContentType = LibHac.Ncm.ContentType;
 using Path = System.IO.Path;
 using SpanHelpers = LibHac.Common.SpanHelpers;
@@ -80,14 +79,11 @@ namespace LibRyubing
                         }
                     }
 
-                    string json = JsonSerializer.Serialize(new Dictionary<string, string>
-                    {
-                        ["titleId"] = applicationId.ToString("x16"),
-                        ["titleName"] = titleName ?? string.Empty,
-                        ["version"] = version ?? "0",
-                        ["developer"] = developer ?? string.Empty,
-                    });
-                    File.WriteAllText(outJsonPath, json, Encoding.UTF8);
+                    WriteProbeJson(outJsonPath,
+                        ("titleId", applicationId.ToString("x16")),
+                        ("titleName", titleName ?? string.Empty),
+                        ("version", version ?? "0"),
+                        ("developer", developer ?? string.Empty));
                     return true;
                 }
             }
@@ -131,14 +127,12 @@ namespace LibRyubing
 
                     string displayVersion = control.DisplayVersionString.ToString();
 
-                    string json = JsonSerializer.Serialize(new Dictionary<string, object>
-                    {
-                        ["titleId"] = applicationId.ToString("x16"),
-                        ["version"] = content.Version.Version,
-                        ["displayVersion"] = displayVersion ?? "0",
-                        ["path"] = path,
-                    });
-                    File.WriteAllText(outJsonPath, json, Encoding.UTF8);
+                    // ponytail: hand-written JSON — NativeAOT has no reflection JsonSerializer
+                    WriteProbeJson(outJsonPath,
+                        ("titleId", applicationId.ToString("x16")),
+                        ("version", content.Version.Version.ToString()),
+                        ("displayVersion", displayVersion ?? "0"),
+                        ("path", path));
                     return true;
                 }
             }
@@ -257,6 +251,64 @@ namespace LibRyubing
 
             vfs.ImportTickets(partitionFileSystem);
             return partitionFileSystem;
+        }
+
+        // NativeAOT: no reflection JsonSerializer — write a flat string-valued object by hand.
+        private static void WriteProbeJson(string path, params (string Key, string Value)[] fields)
+        {
+            StringBuilder sb = new();
+            sb.Append('{');
+            for (int i = 0; i < fields.Length; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(',');
+                }
+
+                sb.Append('"').Append(fields[i].Key).Append("\":\"");
+                AppendJsonEscaped(sb, fields[i].Value ?? string.Empty);
+                sb.Append('"');
+            }
+
+            sb.Append('}');
+            File.WriteAllText(path, sb.ToString(), Encoding.UTF8);
+        }
+
+        private static void AppendJsonEscaped(StringBuilder sb, string value)
+        {
+            foreach (char c in value)
+            {
+                switch (c)
+                {
+                    case '\\':
+                        sb.Append("\\\\");
+                        break;
+                    case '"':
+                        sb.Append("\\\"");
+                        break;
+                    case '\n':
+                        sb.Append("\\n");
+                        break;
+                    case '\r':
+                        sb.Append("\\r");
+                        break;
+                    case '\t':
+                        sb.Append("\\t");
+                        break;
+                    default:
+                        if (c < 0x20)
+                        {
+                            sb.Append("\\u");
+                            sb.Append(((int)c).ToString("x4"));
+                        }
+                        else
+                        {
+                            sb.Append(c);
+                        }
+
+                        break;
+                }
+            }
         }
     }
 }

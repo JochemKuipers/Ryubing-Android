@@ -31,6 +31,7 @@ class EmulationSession(
 
     private val buttonState = AtomicInteger(0)
     @Volatile private var initialized = false
+    @Volatile private var stopThread: Thread? = null
 
     // The ROM is opened via SAF; the descriptor must stay open for the whole session because
     // the core reads content from it on demand (the fd path below points at this descriptor).
@@ -107,6 +108,12 @@ class EmulationSession(
      * passed alongside so the core can still detect the ROM format (the fd path has no extension).
      */
     fun start(game: GameEntry): Boolean {
+        // Finish any in-flight async stop before loading again.
+        stopThread?.let { t ->
+            runCatching { t.join(3000) }
+            if (t === stopThread) stopThread = null
+        }
+
         closeRomFd()
         val pfd = try {
             contentResolver.openFileDescriptor(game.uri, "r")
@@ -124,7 +131,7 @@ class EmulationSession(
             appContext.getString(R.string.system_driver),
         )
 
-        val ok = RyubingNative.core.ryubing_load_application(fdPath, game.title) == 1
+        val ok = RyubingNative.core.ryubing_load_application(fdPath, game.fileName) == 1
         if (!ok) {
             Log.e(TAG, "Failed to load ${game.title} ($fdPath)")
             closeRomFd()
@@ -247,6 +254,9 @@ class EmulationSession(
         }
     }
 
+    fun setPaused(paused: Boolean) =
+        RyubingNative.core.ryubing_set_paused(paused.toInt())
+
     fun setTurboHeld(held: Boolean) =
         RyubingNative.core.ryubing_set_turbo_held(held.toInt())
 
@@ -314,10 +324,31 @@ class EmulationSession(
         RyubingNative.core.ryubing_set_motion_state(ax, ay, az, gx, gy, gz)
 
     fun stop() {
-        if (initialized) RyubingNative.core.ryubing_stop()
-        lastWindowWidth = 0
-        lastWindowHeight = 0
-        closeRomFd()
+        synchronized(this) {
+            if (initialized) {
+                try {
+                    RyubingNative.core.ryubing_stop()
+                } catch (e: Exception) {
+                    Log.e(TAG, "ryubing_stop failed", e)
+                }
+            }
+            lastWindowWidth = 0
+            lastWindowHeight = 0
+            closeRomFd()
+        }
+    }
+
+    /** Non-blocking stop for UI exit paths (avoids ANR on main). */
+    fun stopAsync() {
+        val existing = stopThread
+        if (existing?.isAlive == true) return
+        stopThread = Thread({
+            try {
+                stop()
+            } finally {
+                if (Thread.currentThread() === stopThread) stopThread = null
+            }
+        }, "Ryubing.Stop").also { it.start() }
     }
 
     fun shutdown() {

@@ -225,6 +225,9 @@ namespace LibRyubing
         [UnmanagedCallersOnly(EntryPoint = "ryubing_toggle_pause")]
         public static void TogglePause() => Guard(AndroidHost.TogglePause);
 
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_set_paused")]
+        public static void SetPaused(int paused) => Guard(() => AndroidHost.SetPaused(paused != 0));
+
         [UnmanagedCallersOnly(EntryPoint = "ryubing_toggle_mute")]
         public static void ToggleMute() => Guard(AndroidHost.ToggleMute);
 

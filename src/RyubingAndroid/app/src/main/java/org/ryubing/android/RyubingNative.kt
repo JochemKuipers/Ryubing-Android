@@ -72,6 +72,7 @@ object RyubingNative {
         fun ryubing_set_motion_state(ax: Float, ay: Float, az: Float, gx: Float, gy: Float, gz: Float)
         fun ryubing_set_window_size(width: Int, height: Int)
         fun ryubing_toggle_pause()
+        fun ryubing_set_paused(paused: Int)
         fun ryubing_toggle_mute()
         fun ryubing_adjust_volume(delta: Float)
         fun ryubing_toggle_vsync()

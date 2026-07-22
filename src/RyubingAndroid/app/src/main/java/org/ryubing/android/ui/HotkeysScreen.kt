@@ -34,7 +34,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.ryubing.android.data.GamepadHotkeyRepository
-import org.ryubing.android.input.AndroidKeyLabels
 import org.ryubing.android.input.ControllerKeyCapture
 import org.ryubing.android.input.GamepadHotkeyMapping
 import org.ryubing.android.input.HotkeyAction
@@ -62,9 +61,10 @@ fun HotkeysScreen(
 
     fun startListening(action: HotkeyAction) {
         listeningFor = action
-        ControllerKeyCapture.start(
-            onCaptured = { keyCode ->
-                persist(mapping.withBinding(action, keyCode))
+        ControllerKeyCapture.startBinding(
+            captureCombos = true,
+            onCaptured = { binding ->
+                persist(mapping.withBinding(action, binding))
                 listeningFor = null
             },
             onCancelled = { listeningFor = null },
@@ -100,15 +100,17 @@ fun HotkeysScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        "Press a controller button for “${listeningFor!!.displayLabel()}”…",
+                        "Hold a modifier (e.g. Select), then press the action button — " +
+                            "or press & release one button for a single binding.\n" +
+                            "Listening for “${listeningFor!!.displayLabel()}”…",
                         Modifier.padding(16.dp),
                         style = MaterialTheme.typography.bodyLarge,
                     )
                 }
             } else {
                 Text(
-                    "Tap an action, then press the physical button to bind. " +
-                        "Hotkeys are checked before Switch button mappings.",
+                    "Tap an action to bind. Combos (Select + A, L3 + X, …) work on pads " +
+                        "without extra buttons. Hotkeys are checked before Switch mappings.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -128,14 +130,10 @@ fun HotkeysScreen(
             HorizontalDivider()
 
             HotkeyAction.entries.forEach { action ->
-                val keyCode = mapping.keyFor(action)
+                val binding = mapping.bindingFor(action)
                 HotkeyMappingRow(
                     label = action.displayLabel(),
-                    boundKeyLabel = if (keyCode == android.view.KeyEvent.KEYCODE_UNKNOWN) {
-                        "Unassigned"
-                    } else {
-                        AndroidKeyLabels.label(keyCode)
-                    },
+                    boundKeyLabel = binding.label(),
                     isListening = listeningFor == action,
                     onBind = { startListening(action) },
                     onClear = {

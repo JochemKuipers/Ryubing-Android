@@ -48,6 +48,15 @@ data class EmulatorConfig(
     /** When true, face buttons follow Switch layout (recommended for Nintendo titles). */
     val useSwitchLayout: Boolean = true,
     val showTouchControls: Boolean = true,
+    /** On-screen pad size multiplier (0.5–1.5). */
+    val touchControlsScale: Float = 1f,
+    /** Multiplier applied to touch analog stick output (0.25–2). */
+    val touchStickSensitivity: Float = 1f,
+    /** Overlay button/stick visibility (0.15–1). */
+    val touchControlsOpacity: Float = 0.4f,
+    val showTouchRightStick: Boolean = true,
+    val touchInvertStickY: Boolean = false,
+    val enableMotion: Boolean = true,
     /** SAF tree URI for auto-discovered updates/DLC folders. */
     val updatesFolderUri: String = "",
 )

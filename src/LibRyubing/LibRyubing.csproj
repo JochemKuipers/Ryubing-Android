@@ -76,6 +76,8 @@
     <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.23.0" />
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="2.88.9" />
   </ItemGroup>
 
   <ItemGroup>
