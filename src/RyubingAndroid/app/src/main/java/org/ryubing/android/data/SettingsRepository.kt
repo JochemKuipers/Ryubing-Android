@@ -42,6 +42,7 @@ class SettingsRepository(context: Context) {
         enableColorSpacePassthrough = prefs.getBoolean(KEY_COLOR_SPACE, false),
         enableFileLog = prefs.getBoolean(KEY_FILE_LOG, false),
         audioVolume = prefs.getFloat(KEY_AUDIO_VOLUME, 1f),
+        audioMuted = prefs.getBoolean(KEY_AUDIO_MUTED, false),
         useSwitchLayout = prefs.getBoolean(KEY_SWITCH_LAYOUT, true),
         showTouchControls = prefs.getBoolean(KEY_TOUCH_CONTROLS, true),
         touchControlsScale = prefs.getFloat(KEY_TOUCH_SCALE, 1f).coerceIn(0.5f, 1.5f),
@@ -84,6 +85,7 @@ class SettingsRepository(context: Context) {
         putBoolean(KEY_COLOR_SPACE, config.enableColorSpacePassthrough)
         putBoolean(KEY_FILE_LOG, config.enableFileLog)
         putFloat(KEY_AUDIO_VOLUME, config.audioVolume)
+        putBoolean(KEY_AUDIO_MUTED, config.audioMuted)
         putBoolean(KEY_SWITCH_LAYOUT, config.useSwitchLayout)
         putBoolean(KEY_TOUCH_CONTROLS, config.showTouchControls)
         putFloat(KEY_TOUCH_SCALE, config.touchControlsScale)
@@ -126,6 +128,7 @@ class SettingsRepository(context: Context) {
         const val KEY_COLOR_SPACE = "color_space"
         const val KEY_FILE_LOG = "file_log"
         const val KEY_AUDIO_VOLUME = "audio_volume"
+        const val KEY_AUDIO_MUTED = "audio_muted"
         const val KEY_SWITCH_LAYOUT = "switch_layout"
         const val KEY_TOUCH_CONTROLS = "touch_controls"
         const val KEY_TOUCH_SCALE = "touch_scale"

@@ -45,6 +45,7 @@ data class EmulatorConfig(
     val enableColorSpacePassthrough: Boolean = false,
     val enableFileLog: Boolean = false,
     val audioVolume: Float = 1f,
+    val audioMuted: Boolean = false,
     /** When true, face buttons follow Switch layout (recommended for Nintendo titles). */
     val useSwitchLayout: Boolean = true,
     val showTouchControls: Boolean = true,

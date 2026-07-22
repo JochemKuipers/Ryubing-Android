@@ -91,13 +91,14 @@ fun GameLibraryScreen(
                         } else {
                             val (updates, dlc) = ContentAutoloader(context, appDataPath, session)
                                 .autoload(settings.updatesFolderUri, enriched)
-                            withContext(Dispatchers.Main) {
-                                val msg = if (updates > 0 || dlc > 0) {
-                                    "Autoloaded $updates update(s), $dlc DLC"
-                                } else {
-                                    "No new updates/DLC matched library titles"
+                            if (updates > 0 || dlc > 0) {
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(
+                                        context,
+                                        "Autoloaded $updates update(s), $dlc DLC",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
                                 }
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                             }
                         }
                     }

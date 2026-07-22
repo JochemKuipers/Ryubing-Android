@@ -83,7 +83,7 @@ class EmulationSession(
                 config.enableMacroHle.toInt(),
                 config.enableColorSpacePassthrough.toInt(),
             )
-            ryubing_set_audio_volume(config.audioVolume)
+            ryubing_set_audio_volume(if (config.audioMuted) 0f else config.audioVolume)
             ryubing_set_enable_file_log(config.enableFileLog.toInt())
         }
     }

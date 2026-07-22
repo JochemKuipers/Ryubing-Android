@@ -18,8 +18,6 @@ import org.ryubing.android.emu.EmulationSession
 sealed interface Screen {
     data object Library : Screen
     data object Settings : Screen
-    data object ControllerRemap : Screen
-    data object Hotkeys : Screen
     data object Drivers : Screen
     data class Emulation(val game: GameEntry) : Screen
 }
@@ -51,22 +49,12 @@ fun RyubingApp(
 
         is Screen.Settings -> SettingsScreen(
             repository = settingsRepository,
-            session = session,
-            onOpenControllerRemap = { screen = Screen.ControllerRemap },
-            onOpenHotkeys = { screen = Screen.Hotkeys },
-            onBack = { screen = Screen.Library },
-        )
-
-        is Screen.ControllerRemap -> ControllerRemapScreen(
             mappingRepository = mappingRepository,
-            onBack = { screen = Screen.Settings },
-            onMappingChanged = onControllerMappingChanged,
-        )
-
-        is Screen.Hotkeys -> HotkeysScreen(
             hotkeyRepository = hotkeyRepository,
-            onBack = { screen = Screen.Settings },
+            session = session,
+            onMappingChanged = onControllerMappingChanged,
             onHotkeysChanged = onHotkeysChanged,
+            onBack = { screen = Screen.Library },
         )
 
         is Screen.Drivers -> DriverManagerScreen(

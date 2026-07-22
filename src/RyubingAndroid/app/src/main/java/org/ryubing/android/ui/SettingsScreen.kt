@@ -2,8 +2,10 @@ package org.ryubing.android.ui
 
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -43,21 +46,36 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ryubing.android.R
+import org.ryubing.android.data.ControllerMappingRepository
 import org.ryubing.android.data.EmulatorConfig
+import org.ryubing.android.data.GamepadHotkeyRepository
 import org.ryubing.android.data.SettingsRepository
 import org.ryubing.android.emu.EmulationSession
 import kotlin.math.roundToInt
+
+private enum class SettingsCategory(val title: String) {
+    System("System"),
+    Graphics("Graphics"),
+    Audio("Audio"),
+    Input("Input"),
+    Hotkeys("Hotkeys"),
+    Content("Content"),
+    Keys("Keys"),
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     repository: SettingsRepository,
+    mappingRepository: ControllerMappingRepository,
+    hotkeyRepository: GamepadHotkeyRepository,
     session: EmulationSession,
-    onOpenControllerRemap: () -> Unit,
-    onOpenHotkeys: () -> Unit,
+    onMappingChanged: () -> Unit,
+    onHotkeysChanged: () -> Unit,
     onBack: () -> Unit,
 ) {
     var config by remember { mutableStateOf(repository.load()) }
+    var category by remember { mutableStateOf<SettingsCategory?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -106,12 +124,24 @@ fun SettingsScreen(
         update(config.copy(updatesFolderUri = uri.toString()))
     }
 
+    BackHandler(enabled = category != null) {
+        category = null
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.settings_title)) },
+                title = {
+                    Text(
+                        category?.title ?: stringResource(R.string.settings_title),
+                    )
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(
+                        onClick = {
+                            if (category != null) category = null else onBack()
+                        },
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
@@ -121,275 +151,330 @@ fun SettingsScreen(
         Column(
             Modifier.padding(padding).padding(16.dp).verticalScroll(rememberScrollState()),
         ) {
-            SectionTitle("System")
-            DropdownRow(
-                label = "Language",
-                valueLabel = languageLabel(config.systemLanguage),
-                options = LANGUAGE_OPTIONS,
-                selected = config.systemLanguage,
-                onSelect = { update(config.copy(systemLanguage = it)) },
-            )
-            DropdownRow(
-                label = "Region",
-                valueLabel = regionLabel(config.systemRegion),
-                options = REGION_OPTIONS,
-                selected = config.systemRegion,
-                onSelect = { update(config.copy(systemRegion = it)) },
-            )
-            DropdownRow(
-                label = "DRAM",
-                valueLabel = dramLabel(config.memoryConfiguration),
-                options = DRAM_OPTIONS,
-                selected = config.memoryConfiguration,
-                onSelect = { update(config.copy(memoryConfiguration = it)) },
-            )
-            DropdownRow(
-                label = "Memory manager",
-                valueLabel = memoryModeLabel(config.memoryManagerMode),
-                options = MEMORY_MODE_OPTIONS,
-                selected = config.memoryManagerMode,
-                onSelect = { update(config.copy(memoryManagerMode = it)) },
-            )
-            SwitchRow("Docked mode", config.dockedMode) { update(config.copy(dockedMode = it)) }
-            SwitchRow("Enable PPTC", config.enablePptc) { update(config.copy(enablePptc = it)) }
-            SwitchRow("Low-power PPTC", config.enableLowPowerPtc) {
-                update(config.copy(enableLowPowerPtc = it))
-            }
-            SwitchRow("FS integrity checks", config.enableFsIntegrity) {
-                update(config.copy(enableFsIntegrity = it))
-            }
-            SwitchRow("Internet access", config.enableInternet) {
-                update(config.copy(enableInternet = it))
-            }
-            SwitchRow("Ignore missing services", config.ignoreMissingServices) {
-                update(config.copy(ignoreMissingServices = it))
-            }
-            SwitchRow("Match system time", config.matchSystemTime) {
-                update(config.copy(matchSystemTime = it))
-            }
-            if (!config.matchSystemTime) {
-                IntStepperRow(
-                    label = "Time offset (hours)",
-                    value = (config.systemTimeOffset / 3600L).toInt().coerceIn(-24, 24),
-                    range = -24..24,
-                    step = 1,
-                    onChange = { update(config.copy(systemTimeOffset = it.toLong() * 3600L)) },
-                )
-            }
-            DropdownRow(
-                label = "Time zone",
-                valueLabel = config.timeZone,
-                options = TIMEZONE_OPTIONS,
-                selected = TIMEZONE_OPTIONS.indexOfFirst { it.second == config.timeZone }.coerceAtLeast(0),
-                onSelect = { update(config.copy(timeZone = TIMEZONE_OPTIONS[it].second)) },
-            )
-            IntStepperRow(
-                label = "Tick scalar (%)",
-                value = config.tickScalar.toInt().coerceIn(50, 400),
-                range = 50..400,
-                step = 10,
-                onChange = { update(config.copy(tickScalar = it.toLong())) },
-            )
-            SwitchRow("File logging", config.enableFileLog) {
-                update(config.copy(enableFileLog = it))
-            }
-
-            HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            SectionTitle("Graphics")
-            DropdownRow(
-                label = "Resolution scale",
-                valueLabel = "${config.resScale}x",
-                options = RES_SCALE_OPTIONS,
-                selected = resScaleToIndex(config.resScale),
-                onSelect = { update(config.copy(resScale = RES_SCALE_VALUES[it])) },
-            )
-            DropdownRow(
-                label = "VSync",
-                valueLabel = vsyncLabel(config.vsyncMode),
-                options = VSYNC_OPTIONS,
-                selected = config.vsyncMode,
-                onSelect = { update(config.copy(vsyncMode = it)) },
-            )
-            SwitchRow("Custom VSync interval", config.enableCustomVSync) {
-                update(config.copy(enableCustomVSync = it))
-            }
-            IntStepperRow(
-                label = "Custom VSync Hz",
-                value = config.customVSyncInterval,
-                range = 30..240,
-                step = 5,
-                onChange = { update(config.copy(customVSyncInterval = it)) },
-            )
-            DropdownRow(
-                label = "Aspect ratio",
-                valueLabel = aspectLabel(config.aspectRatio),
-                options = ASPECT_OPTIONS,
-                selected = config.aspectRatio,
-                onSelect = { update(config.copy(aspectRatio = it)) },
-            )
-            DropdownRow(
-                label = "Anti-aliasing",
-                valueLabel = aaLabel(config.antiAliasing),
-                options = AA_OPTIONS,
-                selected = config.antiAliasing,
-                onSelect = { update(config.copy(antiAliasing = it)) },
-            )
-            DropdownRow(
-                label = "Scaling filter",
-                valueLabel = scalingFilterLabel(config.scalingFilter),
-                options = SCALING_FILTER_OPTIONS,
-                selected = config.scalingFilter,
-                onSelect = { update(config.copy(scalingFilter = it)) },
-            )
-            SliderRow(
-                label = "Scaling filter level: ${config.scalingFilterLevel}",
-                value = config.scalingFilterLevel.toFloat(),
-                range = 0f..100f,
-                onChange = { update(config.copy(scalingFilterLevel = it.roundToInt())) },
-            )
-            DropdownRow(
-                label = "Max anisotropy",
-                valueLabel = anisotropyLabel(config.maxAnisotropy),
-                options = ANISOTROPY_OPTIONS,
-                selected = anisotropyToIndex(config.maxAnisotropy),
-                onSelect = { update(config.copy(maxAnisotropy = ANISOTROPY_VALUES[it])) },
-            )
-            DropdownRow(
-                label = "Backend threading",
-                valueLabel = backendThreadingLabel(config.backendThreading),
-                options = BACKEND_THREADING_OPTIONS,
-                selected = config.backendThreading,
-                onSelect = { update(config.copy(backendThreading = it)) },
-            )
-            SwitchRow("Shader cache", config.enableShaderCache) {
-                update(config.copy(enableShaderCache = it))
-            }
-            SwitchRow("Texture recompression", config.enableTextureRecompression) {
-                update(config.copy(enableTextureRecompression = it))
-            }
-            SwitchRow("Macro HLE", config.enableMacroHle) {
-                update(config.copy(enableMacroHle = it))
-            }
-            SwitchRow("Color space passthrough", config.enableColorSpacePassthrough) {
-                update(config.copy(enableColorSpacePassthrough = it))
-            }
-
-            HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            SectionTitle("Audio")
-            SliderRow(
-                label = "Volume: ${(config.audioVolume * 100).roundToInt()}%",
-                value = config.audioVolume,
-                range = 0f..1f,
-                onChange = { update(config.copy(audioVolume = it)) },
-            )
-
-            HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            SectionTitle("Input")
-            Button(
-                onClick = onOpenControllerRemap,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            ) {
-                Text(stringResource(R.string.controller_remap_title))
-            }
-            SwitchRow("On-screen touch controls", config.showTouchControls) {
-                update(config.copy(showTouchControls = it))
-            }
-            if (config.showTouchControls) {
-                SliderRow(
-                    label = "Touch overlay scale: ${(config.touchControlsScale * 100).roundToInt()}%",
-                    value = config.touchControlsScale,
-                    range = 0.5f..1.5f,
-                    onChange = { update(config.copy(touchControlsScale = it)) },
-                )
-                SliderRow(
-                    label = "Touch stick sensitivity: ${"%.2f".format(config.touchStickSensitivity)}",
-                    value = config.touchStickSensitivity,
-                    range = 0.25f..2f,
-                    onChange = { update(config.copy(touchStickSensitivity = it)) },
-                )
-                SliderRow(
-                    label = "Touch overlay opacity: ${(config.touchControlsOpacity * 100).roundToInt()}%",
-                    value = config.touchControlsOpacity,
-                    range = 0.15f..1f,
-                    onChange = { update(config.copy(touchControlsOpacity = it)) },
-                )
-                SwitchRow("Show right stick", config.showTouchRightStick) {
-                    update(config.copy(showTouchRightStick = it))
+            when (category) {
+                null -> {
+                    SettingsCategory.entries.forEachIndexed { index, cat ->
+                        if (index > 0) HorizontalDivider()
+                        CategoryRow(title = cat.title) { category = cat }
+                    }
                 }
-                SwitchRow("Invert touch stick Y", config.touchInvertStickY) {
-                    update(config.copy(touchInvertStickY = it))
-                }
-                SwitchRow("Switch controller layout", config.useSwitchLayout) {
-                    update(config.copy(useSwitchLayout = it))
-                }
-            }
-            SwitchRow("Motion sensor", config.enableMotion) {
-                update(config.copy(enableMotion = it))
-            }
-
-            HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            SectionTitle("Hotkeys")
-            Button(
-                onClick = onOpenHotkeys,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            ) {
-                Text("Configure hotkeys")
-            }
-
-            HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            SectionTitle("Content")
-            Text(
-                "Updates / DLC folder used for automatic discovery after library scans.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                if (config.updatesFolderUri.isBlank()) "No folder selected"
-                else config.updatesFolderUri,
-                Modifier.padding(vertical = 8.dp),
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Button(
-                onClick = { updatesFolderPicker.launch(null) },
-                Modifier.fillMaxWidth().padding(top = 4.dp),
-            ) {
-                Text("Pick Updates/DLC folder")
-            }
-            if (config.updatesFolderUri.isNotBlank()) {
-                OutlinedButton(
-                    onClick = { update(config.copy(updatesFolderUri = "")) },
-                    Modifier.fillMaxWidth().padding(top = 8.dp),
-                ) {
-                    Text("Clear folder")
-                }
-            }
-
-            HorizontalDivider(Modifier.padding(vertical = 12.dp))
-            SectionTitle("Keys")
-            Text(
-                "Import decryption keys and a firmware package. Keys are required to load games.",
-                Modifier.padding(top = 4.dp, bottom = 8.dp),
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Button(
-                onClick = { keysPicker.launch(arrayOf("*/*")) },
-                Modifier.fillMaxWidth().padding(top = 4.dp),
-            ) {
-                Text("Install prod.keys")
-            }
-            Button(
-                onClick = { firmwarePicker.launch(arrayOf("*/*")) },
-                Modifier.fillMaxWidth().padding(top = 8.dp),
-            ) {
-                Text("Install firmware (.zip / .xci)")
+                SettingsCategory.System -> SystemSettingsPage(config, ::update)
+                SettingsCategory.Graphics -> GraphicsSettingsPage(config, ::update)
+                SettingsCategory.Audio -> AudioSettingsPage(config, ::update)
+                SettingsCategory.Input -> InputSettingsPage(
+                    config = config,
+                    update = ::update,
+                    mappingRepository = mappingRepository,
+                    onMappingChanged = onMappingChanged,
+                )
+                SettingsCategory.Hotkeys -> HotkeysPanel(
+                    hotkeyRepository = hotkeyRepository,
+                    onHotkeysChanged = onHotkeysChanged,
+                )
+                SettingsCategory.Content -> ContentSettingsPage(
+                    config = config,
+                    onUpdate = ::update,
+                    onPickFolder = { updatesFolderPicker.launch(null) },
+                )
+                SettingsCategory.Keys -> KeysSettingsPage(
+                    onInstallKeys = { keysPicker.launch(arrayOf("*/*")) },
+                    onInstallFirmware = { firmwarePicker.launch(arrayOf("*/*")) },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun SectionTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 4.dp))
+private fun CategoryRow(title: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun SystemSettingsPage(config: EmulatorConfig, update: (EmulatorConfig) -> Unit) {
+    DropdownRow(
+        label = "Language",
+        valueLabel = languageLabel(config.systemLanguage),
+        options = LANGUAGE_OPTIONS,
+        selected = config.systemLanguage,
+        onSelect = { update(config.copy(systemLanguage = it)) },
+    )
+    DropdownRow(
+        label = "Region",
+        valueLabel = regionLabel(config.systemRegion),
+        options = REGION_OPTIONS,
+        selected = config.systemRegion,
+        onSelect = { update(config.copy(systemRegion = it)) },
+    )
+    DropdownRow(
+        label = "DRAM",
+        valueLabel = dramLabel(config.memoryConfiguration),
+        options = DRAM_OPTIONS,
+        selected = config.memoryConfiguration,
+        onSelect = { update(config.copy(memoryConfiguration = it)) },
+    )
+    DropdownRow(
+        label = "Memory manager",
+        valueLabel = memoryModeLabel(config.memoryManagerMode),
+        options = MEMORY_MODE_OPTIONS,
+        selected = config.memoryManagerMode,
+        onSelect = { update(config.copy(memoryManagerMode = it)) },
+    )
+    SwitchRow("Docked mode", config.dockedMode) { update(config.copy(dockedMode = it)) }
+    SwitchRow("Enable PPTC", config.enablePptc) { update(config.copy(enablePptc = it)) }
+    SwitchRow("Low-power PPTC", config.enableLowPowerPtc) {
+        update(config.copy(enableLowPowerPtc = it))
+    }
+    SwitchRow("FS integrity checks", config.enableFsIntegrity) {
+        update(config.copy(enableFsIntegrity = it))
+    }
+    SwitchRow("Internet access", config.enableInternet) {
+        update(config.copy(enableInternet = it))
+    }
+    SwitchRow("Ignore missing services", config.ignoreMissingServices) {
+        update(config.copy(ignoreMissingServices = it))
+    }
+    SwitchRow("Match system time", config.matchSystemTime) {
+        update(config.copy(matchSystemTime = it))
+    }
+    if (!config.matchSystemTime) {
+        IntStepperRow(
+            label = "Time offset (hours)",
+            value = (config.systemTimeOffset / 3600L).toInt().coerceIn(-24, 24),
+            range = -24..24,
+            step = 1,
+            onChange = { update(config.copy(systemTimeOffset = it.toLong() * 3600L)) },
+        )
+    }
+    DropdownRow(
+        label = "Time zone",
+        valueLabel = config.timeZone,
+        options = TIMEZONE_OPTIONS,
+        selected = TIMEZONE_OPTIONS.indexOfFirst { it.second == config.timeZone }.coerceAtLeast(0),
+        onSelect = { update(config.copy(timeZone = TIMEZONE_OPTIONS[it].second)) },
+    )
+    IntStepperRow(
+        label = "Tick scalar (%)",
+        value = config.tickScalar.toInt().coerceIn(50, 400),
+        range = 50..400,
+        step = 10,
+        onChange = { update(config.copy(tickScalar = it.toLong())) },
+    )
+    SwitchRow("File logging", config.enableFileLog) {
+        update(config.copy(enableFileLog = it))
+    }
+}
+
+@Composable
+private fun GraphicsSettingsPage(config: EmulatorConfig, update: (EmulatorConfig) -> Unit) {
+    DropdownRow(
+        label = "Resolution scale",
+        valueLabel = "${config.resScale}x",
+        options = RES_SCALE_OPTIONS,
+        selected = resScaleToIndex(config.resScale),
+        onSelect = { update(config.copy(resScale = RES_SCALE_VALUES[it])) },
+    )
+    DropdownRow(
+        label = "VSync",
+        valueLabel = vsyncLabel(config.vsyncMode),
+        options = VSYNC_OPTIONS,
+        selected = config.vsyncMode,
+        onSelect = { update(config.copy(vsyncMode = it)) },
+    )
+    SwitchRow("Custom VSync interval", config.enableCustomVSync) {
+        update(config.copy(enableCustomVSync = it))
+    }
+    IntStepperRow(
+        label = "Custom VSync Hz",
+        value = config.customVSyncInterval,
+        range = 30..240,
+        step = 5,
+        onChange = { update(config.copy(customVSyncInterval = it)) },
+    )
+    DropdownRow(
+        label = "Aspect ratio",
+        valueLabel = aspectLabel(config.aspectRatio),
+        options = ASPECT_OPTIONS,
+        selected = config.aspectRatio,
+        onSelect = { update(config.copy(aspectRatio = it)) },
+    )
+    DropdownRow(
+        label = "Anti-aliasing",
+        valueLabel = aaLabel(config.antiAliasing),
+        options = AA_OPTIONS,
+        selected = config.antiAliasing,
+        onSelect = { update(config.copy(antiAliasing = it)) },
+    )
+    DropdownRow(
+        label = "Scaling filter",
+        valueLabel = scalingFilterLabel(config.scalingFilter),
+        options = SCALING_FILTER_OPTIONS,
+        selected = config.scalingFilter,
+        onSelect = { update(config.copy(scalingFilter = it)) },
+    )
+    SliderRow(
+        label = "Scaling filter level: ${config.scalingFilterLevel}",
+        value = config.scalingFilterLevel.toFloat(),
+        range = 0f..100f,
+        onChange = { update(config.copy(scalingFilterLevel = it.roundToInt())) },
+    )
+    DropdownRow(
+        label = "Max anisotropy",
+        valueLabel = anisotropyLabel(config.maxAnisotropy),
+        options = ANISOTROPY_OPTIONS,
+        selected = anisotropyToIndex(config.maxAnisotropy),
+        onSelect = { update(config.copy(maxAnisotropy = ANISOTROPY_VALUES[it])) },
+    )
+    DropdownRow(
+        label = "Backend threading",
+        valueLabel = backendThreadingLabel(config.backendThreading),
+        options = BACKEND_THREADING_OPTIONS,
+        selected = config.backendThreading,
+        onSelect = { update(config.copy(backendThreading = it)) },
+    )
+    SwitchRow("Shader cache", config.enableShaderCache) {
+        update(config.copy(enableShaderCache = it))
+    }
+    SwitchRow("Texture recompression", config.enableTextureRecompression) {
+        update(config.copy(enableTextureRecompression = it))
+    }
+    SwitchRow("Macro HLE", config.enableMacroHle) {
+        update(config.copy(enableMacroHle = it))
+    }
+    SwitchRow("Color space passthrough", config.enableColorSpacePassthrough) {
+        update(config.copy(enableColorSpacePassthrough = it))
+    }
+}
+
+@Composable
+private fun AudioSettingsPage(config: EmulatorConfig, update: (EmulatorConfig) -> Unit) {
+    SwitchRow("Mute", config.audioMuted) { update(config.copy(audioMuted = it)) }
+    SliderRow(
+        label = "Volume: ${(config.audioVolume * 100).roundToInt()}%",
+        value = config.audioVolume,
+        range = 0f..1f,
+        onChange = { update(config.copy(audioVolume = it, audioMuted = false)) },
+    )
+}
+
+@Composable
+private fun InputSettingsPage(
+    config: EmulatorConfig,
+    update: (EmulatorConfig) -> Unit,
+    mappingRepository: ControllerMappingRepository,
+    onMappingChanged: () -> Unit,
+) {
+    ControllerRemapPanel(
+        mappingRepository = mappingRepository,
+        onMappingChanged = onMappingChanged,
+    )
+    HorizontalDivider(Modifier.padding(vertical = 12.dp))
+    Text("Touch controls", style = MaterialTheme.typography.titleSmall)
+    SwitchRow("On-screen touch controls", config.showTouchControls) {
+        update(config.copy(showTouchControls = it))
+    }
+    if (config.showTouchControls) {
+        SliderRow(
+            label = "Touch overlay scale: ${(config.touchControlsScale * 100).roundToInt()}%",
+            value = config.touchControlsScale,
+            range = 0.5f..1.5f,
+            onChange = { update(config.copy(touchControlsScale = it)) },
+        )
+        SliderRow(
+            label = "Touch stick sensitivity: ${"%.2f".format(config.touchStickSensitivity)}",
+            value = config.touchStickSensitivity,
+            range = 0.25f..2f,
+            onChange = { update(config.copy(touchStickSensitivity = it)) },
+        )
+        SliderRow(
+            label = "Touch overlay opacity: ${(config.touchControlsOpacity * 100).roundToInt()}%",
+            value = config.touchControlsOpacity,
+            range = 0.15f..1f,
+            onChange = { update(config.copy(touchControlsOpacity = it)) },
+        )
+        SwitchRow("Show right stick", config.showTouchRightStick) {
+            update(config.copy(showTouchRightStick = it))
+        }
+        SwitchRow("Invert touch stick Y", config.touchInvertStickY) {
+            update(config.copy(touchInvertStickY = it))
+        }
+        SwitchRow("Switch controller layout", config.useSwitchLayout) {
+            update(config.copy(useSwitchLayout = it))
+        }
+    }
+    SwitchRow("Motion sensor", config.enableMotion) {
+        update(config.copy(enableMotion = it))
+    }
+}
+
+@Composable
+private fun ContentSettingsPage(
+    config: EmulatorConfig,
+    onUpdate: (EmulatorConfig) -> Unit,
+    onPickFolder: () -> Unit,
+) {
+    Text(
+        "Updates / DLC folder used for automatic discovery after library scans.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+        if (config.updatesFolderUri.isBlank()) "No folder selected"
+        else config.updatesFolderUri,
+        Modifier.padding(vertical = 8.dp),
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Button(
+        onClick = onPickFolder,
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+    ) {
+        Text("Pick Updates/DLC folder")
+    }
+    if (config.updatesFolderUri.isNotBlank()) {
+        OutlinedButton(
+            onClick = { onUpdate(config.copy(updatesFolderUri = "")) },
+            Modifier.fillMaxWidth().padding(top = 8.dp),
+        ) {
+            Text("Clear folder")
+        }
+    }
+}
+
+@Composable
+private fun KeysSettingsPage(
+    onInstallKeys: () -> Unit,
+    onInstallFirmware: () -> Unit,
+) {
+    Text(
+        "Import decryption keys and a firmware package. Keys are required to load games.",
+        Modifier.padding(top = 4.dp, bottom = 8.dp),
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Button(
+        onClick = onInstallKeys,
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+    ) {
+        Text("Install prod.keys")
+    }
+    Button(
+        onClick = onInstallFirmware,
+        Modifier.fillMaxWidth().padding(top = 8.dp),
+    ) {
+        Text("Install firmware (.zip / .xci)")
+    }
 }
 
 @Composable
