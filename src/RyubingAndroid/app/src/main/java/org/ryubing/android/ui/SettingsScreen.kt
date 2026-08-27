@@ -2,7 +2,6 @@ package org.ryubing.android.ui
 
 import android.content.Context
 import android.content.Intent
-import android.os.Environment
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -58,6 +57,7 @@ import org.ryubing.android.data.DataFolderResolver
 import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.EmulatorConfig
 import org.ryubing.android.data.GamepadHotkeyRepository
+import org.ryubing.android.data.SafPathResolver
 import org.ryubing.android.data.SettingsRepository
 import org.ryubing.android.emu.EmulationSession
 import java.io.File
@@ -731,11 +731,12 @@ private fun anisotropyToIndex(value: Float): Int {
 // --- Data location ---
 
 /**
- * Emulator data folder selection. The system SAF picker cannot enter Android/data
- * (Android 11+ hides it and refuses persistable grants), so location choices are made
- * here; the custom option uses [FolderBrowserDialog], which browses via plain File APIs
- * under All Files Access. Changing the folder migrates data (optional) and restarts the
- * app so the core re-initializes against the new path.
+ * Emulator data folder selection: internal filesDir (default), the Android/data external
+ * files dir (a fixed location the system SAF picker cannot reach — Android 11+ hides
+ * Android/data and refuses persistable grants there, hence the dedicated option), or any
+ * custom folder chosen with the system folder picker (resolved to a real filesystem path
+ * via SafPathResolver, since the core only reads raw paths). Changing the folder migrates
+ * data (optional) and restarts the app so the core re-initializes against the new path.
  */
 @Composable
 private fun DataLocationPage(
@@ -744,7 +745,6 @@ private fun DataLocationPage(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var showBrowser by remember { mutableStateOf(false) }
     var pendingMode by remember { mutableStateOf<Int?>(null) }
     var pendingCustomPath by remember { mutableStateOf("") }
     var migrating by remember { mutableStateOf(false) }
@@ -753,8 +753,7 @@ private fun DataLocationPage(
 
     Text("Emulator data folder", style = MaterialTheme.typography.titleMedium)
     Text(
-        "Keys, save data, mods, profiles and caches are stored here. The system folder " +
-            "picker cannot enter Android/data, so pick the location here instead.",
+        "Keys, save data, mods, profiles and caches are stored here.",
         style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.padding(vertical = 8.dp),
     )
@@ -768,6 +767,28 @@ private fun DataLocationPage(
     fun requestChange(mode: Int, customPath: String) {
         pendingMode = mode
         pendingCustomPath = customPath
+    }
+
+    val customFolderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            // Resolve the SAF tree URI to a real filesystem path; the emulator core only
+            // reads raw paths. SAF-only locations (e.g. cloud roots) don't resolve — reject.
+            val path = withContext(Dispatchers.IO) {
+                SafPathResolver.resolve(context, uri)
+            }
+            if (path == null) {
+                Toast.makeText(
+                    context,
+                    "That location can't be used — it has no filesystem path",
+                    Toast.LENGTH_LONG,
+                ).show()
+            } else {
+                requestChange(DataFolderResolver.MODE_CUSTOM, path)
+            }
+        }
     }
 
     RadioRow(
@@ -793,19 +814,8 @@ private fun DataLocationPage(
             "Choose any folder on the device"
         },
         selected = config.dataFolderMode == DataFolderResolver.MODE_CUSTOM,
-        onClick = { showBrowser = true },
+        onClick = { customFolderPicker.launch(null) },
     )
-
-    if (showBrowser) {
-        FolderBrowserDialog(
-            initialDir = Environment.getExternalStorageDirectory(),
-            onDismiss = { showBrowser = false },
-            onSelect = { dir ->
-                showBrowser = false
-                requestChange(DataFolderResolver.MODE_CUSTOM, dir.absolutePath)
-            },
-        )
-    }
 
     val mode = pendingMode
     if (mode != null) {
