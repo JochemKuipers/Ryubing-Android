@@ -5,7 +5,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
 import org.ryubing.android.data.ControllerMappingRepository
 import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.GamepadHotkeyRepository
@@ -29,11 +28,11 @@ fun RyubingApp(
     hotkeyRepository: GamepadHotkeyRepository,
     driverRepository: DriverRepository,
     session: EmulationSession,
+    appDataPath: String,
     onControllerMappingChanged: () -> Unit,
     onHotkeysChanged: () -> Unit,
 ) {
     var screen: Screen by remember { mutableStateOf(Screen.Library) }
-    val appDataPath = LocalContext.current.filesDir.absolutePath
 
     when (val current = screen) {
         is Screen.Library -> GameLibraryScreen(

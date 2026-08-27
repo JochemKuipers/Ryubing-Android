@@ -1,6 +1,8 @@
 package org.ryubing.android.ui
 
+import android.content.Context
 import android.content.Intent
+import android.os.Environment
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -16,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -25,10 +28,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
@@ -48,11 +54,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ryubing.android.R
 import org.ryubing.android.data.ControllerMappingRepository
+import org.ryubing.android.data.DataFolderResolver
 import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.EmulatorConfig
 import org.ryubing.android.data.GamepadHotkeyRepository
 import org.ryubing.android.data.SettingsRepository
 import org.ryubing.android.emu.EmulationSession
+import java.io.File
 import kotlin.math.roundToInt
 
 private enum class SettingsCategory(val title: String) {
@@ -64,6 +72,7 @@ private enum class SettingsCategory(val title: String) {
     Drivers("GPU Drivers"),
     Content("Content"),
     Keys("Keys"),
+    Data("Data location"),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -215,6 +224,7 @@ fun SettingsScreen(
                     onInstallKeys = { keysPicker.launch(arrayOf("*/*")) },
                     onInstallFirmware = { firmwarePicker.launch(arrayOf("*/*")) },
                 )
+                SettingsCategory.Data -> DataLocationPage(config, ::update)
             }
         }
     }
@@ -716,4 +726,180 @@ private fun resScaleToIndex(scale: Float): Int {
 private fun anisotropyToIndex(value: Float): Int {
     val idx = ANISOTROPY_VALUES.indexOfFirst { it == value }
     return if (idx >= 0) idx else 0
+}
+
+// --- Data location ---
+
+/**
+ * Emulator data folder selection. The system SAF picker cannot enter Android/data
+ * (Android 11+ hides it and refuses persistable grants), so location choices are made
+ * here; the custom option uses [FolderBrowserDialog], which browses via plain File APIs
+ * under All Files Access. Changing the folder migrates data (optional) and restarts the
+ * app so the core re-initializes against the new path.
+ */
+@Composable
+private fun DataLocationPage(
+    config: EmulatorConfig,
+    update: (EmulatorConfig) -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var showBrowser by remember { mutableStateOf(false) }
+    var pendingMode by remember { mutableStateOf<Int?>(null) }
+    var pendingCustomPath by remember { mutableStateOf("") }
+    var migrating by remember { mutableStateOf(false) }
+
+    val currentPath = DataFolderResolver.resolve(context, config)
+
+    Text("Emulator data folder", style = MaterialTheme.typography.titleMedium)
+    Text(
+        "Keys, save data, mods, profiles and caches are stored here. The system folder " +
+            "picker cannot enter Android/data, so pick the location here instead.",
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(vertical = 8.dp),
+    )
+    Text(
+        "Current: ${currentPath.absolutePath}",
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        modifier = Modifier.padding(bottom = 12.dp),
+    )
+
+    fun requestChange(mode: Int, customPath: String) {
+        pendingMode = mode
+        pendingCustomPath = customPath
+    }
+
+    RadioRow(
+        label = "Internal storage (private)",
+        description = context.filesDir.absolutePath,
+        selected = config.dataFolderMode == DataFolderResolver.MODE_INTERNAL,
+        onClick = { requestChange(DataFolderResolver.MODE_INTERNAL, "") },
+    )
+    RadioRow(
+        label = "Android/data (browsable)",
+        description = context.getExternalFilesDir(null)?.absolutePath ?: "Unavailable",
+        selected = config.dataFolderMode == DataFolderResolver.MODE_ANDROID_DATA,
+        onClick = { requestChange(DataFolderResolver.MODE_ANDROID_DATA, "") },
+    )
+    RadioRow(
+        label = "Custom folder",
+        description = if (
+            config.dataFolderMode == DataFolderResolver.MODE_CUSTOM &&
+            config.dataFolderCustomPath.isNotBlank()
+        ) {
+            config.dataFolderCustomPath
+        } else {
+            "Choose any folder on the device"
+        },
+        selected = config.dataFolderMode == DataFolderResolver.MODE_CUSTOM,
+        onClick = { showBrowser = true },
+    )
+
+    if (showBrowser) {
+        FolderBrowserDialog(
+            initialDir = Environment.getExternalStorageDirectory(),
+            onDismiss = { showBrowser = false },
+            onSelect = { dir ->
+                showBrowser = false
+                requestChange(DataFolderResolver.MODE_CUSTOM, dir.absolutePath)
+            },
+        )
+    }
+
+    val mode = pendingMode
+    if (mode != null) {
+        val newConfig = config.copy(dataFolderMode = mode, dataFolderCustomPath = pendingCustomPath)
+        val targetPath = DataFolderResolver.resolve(context, newConfig)
+        val canCopy = targetPath.absolutePath != currentPath.absolutePath &&
+            !targetPath.absolutePath.startsWith(currentPath.absolutePath + File.separator)
+
+        AlertDialog(
+            onDismissRequest = { pendingMode = null },
+            title = { Text("Change data folder?") },
+            text = {
+                Text(
+                    "New location:\n${targetPath.absolutePath}\n\n" +
+                        "The app will restart to apply it. Data in the old location is kept.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (canCopy) {
+                            migrating = true
+                            pendingMode = null
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    runCatching { DataFolderResolver.migrateData(currentPath, targetPath) }
+                                        .onFailure { android.util.Log.e("DataLocation", "Migration failed", it) }
+                                    update(newConfig)
+                                }
+                                restartApp(context)
+                            }
+                        } else {
+                            pendingMode = null
+                            update(newConfig)
+                            restartApp(context)
+                        }
+                    },
+                ) { Text(if (canCopy) "Copy data & restart" else "Apply & restart") }
+            },
+            dismissButton = {
+                if (canCopy) {
+                    TextButton(
+                        onClick = {
+                            pendingMode = null
+                            update(newConfig)
+                            restartApp(context)
+                        },
+                    ) { Text("Apply without copying") }
+                } else {
+                    TextButton(onClick = { pendingMode = null }) { Text("Cancel") }
+                }
+            },
+        )
+    }
+
+    if (migrating) {
+        AlertDialog(
+            onDismissRequest = {},
+            confirmButton = {},
+            title = { Text("Copying data…") },
+            text = {
+                Text("Copying keys, saves, mods and caches. Large shader caches can take several minutes.")
+            },
+        )
+    }
+}
+
+private fun restartApp(context: Context) {
+    val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+    intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+    context.startActivity(intent)
+    Runtime.getRuntime().exit(0)
+}
+
+@Composable
+private fun RadioRow(label: String, description: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Column(Modifier.padding(start = 8.dp)) {
+            Text(label)
+            if (description.isNotBlank()) {
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }

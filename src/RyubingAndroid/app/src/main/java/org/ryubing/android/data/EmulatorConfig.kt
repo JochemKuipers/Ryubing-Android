@@ -62,4 +62,8 @@ data class EmulatorConfig(
     val motionSensitivity: Float = 1f,
     /** SAF tree URI for auto-discovered updates/DLC folders. */
     val updatesFolderUri: String = "",
+    /** Data folder mode: 0 = internal (filesDir), 1 = Android/data external files dir, 2 = custom. */
+    val dataFolderMode: Int = 0,
+    /** Custom data folder: plain filesystem path (or content:// tree URI, resolved at startup). */
+    val dataFolderCustomPath: String = "",
 )

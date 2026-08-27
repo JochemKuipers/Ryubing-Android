@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import org.ryubing.android.data.ControllerMappingRepository
+import org.ryubing.android.data.DataFolderResolver
 import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.GamepadHotkeyRepository
 import org.ryubing.android.data.GameRepository
@@ -37,9 +38,13 @@ class MainActivity : ComponentActivity() {
         mappingRepository = ControllerMappingRepository(applicationContext)
         hotkeyRepository = GamepadHotkeyRepository(applicationContext)
         val driverRepo = DriverRepository(applicationContext)
+        // Emulator data (keys, saves, mods) follows the user-selected data folder; the core
+        // receives this path via ryubing_initialize() → AppDataManager (custom mode).
+        val dataDir = DataFolderResolver.resolve(applicationContext, settingsRepository.load())
+        driverRepo.emulatorDataDir = dataDir
         session = EmulationSession(
             applicationContext,
-            filesDir.absolutePath,
+            dataDir.absolutePath,
             contentResolver,
             driverRepo,
         )
@@ -54,6 +59,7 @@ class MainActivity : ComponentActivity() {
                     hotkeyRepository = hotkeyRepository,
                     driverRepository = driverRepo,
                     session = session,
+                    appDataPath = dataDir.absolutePath,
                     onControllerMappingChanged = ::refreshPhysicalGamepad,
                     onHotkeysChanged = ::refreshPhysicalGamepad,
                 )

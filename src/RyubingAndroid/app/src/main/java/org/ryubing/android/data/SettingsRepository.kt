@@ -53,6 +53,8 @@ class SettingsRepository(context: Context) {
         enableMotion = prefs.getBoolean(KEY_ENABLE_MOTION, true),
         motionSensitivity = prefs.getFloat(KEY_MOTION_SENS, 1f).coerceIn(0.25f, 2f),
         updatesFolderUri = prefs.getString(KEY_UPDATES_FOLDER_URI, "") ?: "",
+        dataFolderMode = prefs.getInt(KEY_DATA_FOLDER_MODE, 0),
+        dataFolderCustomPath = prefs.getString(KEY_DATA_FOLDER_CUSTOM_PATH, "") ?: "",
     )
 
     fun save(config: EmulatorConfig) = prefs.edit {
@@ -97,6 +99,8 @@ class SettingsRepository(context: Context) {
         putBoolean(KEY_ENABLE_MOTION, config.enableMotion)
         putFloat(KEY_MOTION_SENS, config.motionSensitivity)
         putString(KEY_UPDATES_FOLDER_URI, config.updatesFolderUri)
+        putInt(KEY_DATA_FOLDER_MODE, config.dataFolderMode)
+        putString(KEY_DATA_FOLDER_CUSTOM_PATH, config.dataFolderCustomPath)
     }
 
     private companion object {
@@ -141,5 +145,7 @@ class SettingsRepository(context: Context) {
         const val KEY_ENABLE_MOTION = "enable_motion"
         const val KEY_MOTION_SENS = "motion_sens"
         const val KEY_UPDATES_FOLDER_URI = "updates_folder_uri"
+        const val KEY_DATA_FOLDER_MODE = "data_folder_mode"
+        const val KEY_DATA_FOLDER_CUSTOM_PATH = "data_folder_custom_path"
     }
 }

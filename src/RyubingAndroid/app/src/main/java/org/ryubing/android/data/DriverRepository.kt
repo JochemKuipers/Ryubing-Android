@@ -24,6 +24,15 @@ class DriverRepository(private val context: Context) {
     private val driversRoot: File
         get() = File(context.filesDir, "drivers").also { it.mkdirs() }
 
+    /**
+     * Emulator data root — games/<titleId>/cache/shader live here. Differs from filesDir
+     * when the user selects a custom/Android-data data folder; assigned once at startup
+     * (see MainActivity). GPU drivers themselves always stay in internal storage because
+     * adrenotools dlopens them directly from filesDir.
+     */
+    @Volatile
+    var emulatorDataDir: File = context.filesDir
+
     /** Writable staging dir adrenotools reads the custom driver from (wiped before each load). */
     val stagingDir: File
         get() = File(context.filesDir, "driver").also { it.mkdirs() }
@@ -57,11 +66,11 @@ class DriverRepository(private val context: Context) {
     }
 
     /**
-     * Deletes every title's games/.../cache/shader directory under filesDir.
+     * Deletes every title's games/.../cache/shader directory under the emulator data root.
      * Matches Eden's wipe on Vulkan driver switch so pipelines aren't reused across drivers.
      */
     fun clearAllShaderCaches() {
-        val gamesDir = File(context.filesDir, "games")
+        val gamesDir = File(emulatorDataDir, "games")
         if (!gamesDir.isDirectory) return
         gamesDir.listFiles()?.forEach { titleDir ->
             if (!titleDir.isDirectory) return@forEach
