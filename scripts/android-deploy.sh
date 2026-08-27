@@ -27,9 +27,13 @@ Build / deploy:
   resume             Relaunch without waiting for debugger (unstick "Waiting for debugger")
   logcat             Stream app logs (Ctrl+C to stop)
   devices            List adb devices
-  ensure-device      Verify adb device is connected (auto wireless reconnect)
+  ensure-device      Verify adb device is connected (USB preferred, auto wireless reconnect)
 
-Wireless debugging (recommended):
+Device selection: USB is used automatically whenever a USB device is plugged
+in; a saved wireless endpoint is the fallback. Export ANDROID_SERIAL to
+override.
+
+Wireless debugging (fallback):
   wireless pair <ip:port> <code>   Pair using the phone's pairing port + 6-digit code
   wireless connect [ip:port]         Connect (uses .wireless-adb.env if no arg)
   wireless save <ip:port>            Save the connect endpoint for auto-reconnect
@@ -68,7 +72,10 @@ adb_hint_no_device() {
     cat >&2 <<EOF
 No adb device available.
 
-Wireless debugging (recommended):
+Easiest fix: plug the phone in over USB (USB debugging enabled in Developer
+options) and rerun.
+
+Wireless alternative:
   1. Phone → Settings → Developer options → Wireless debugging → ON
   2. Pair (first time / after reset):
        $(basename "$0") wireless pair <pair-ip:port> <6-digit-code>
@@ -85,14 +92,50 @@ Then: wsl --shutdown
 EOF
 }
 
-device_state() {
-    adb devices 2>/dev/null | awk 'NR>1 && $2=="device" { print $2; exit }'
+# USB transports carry a `usb:` property in `adb devices -l`; wireless (TCP)
+# transports have ip:port serials and no usb: property.
+usb_device_serial() {
+    adb devices -l 2>/dev/null | awk 'NR>1 && $2=="device" && / usb:/ { print $1; exit }'
+}
+
+remote_device_serial() {
+    adb devices -l 2>/dev/null | awk 'NR>1 && $2=="device" && !/ usb:/ { print $1; exit }'
+}
+
+# Pick the device all subsequent adb commands will target. A USB transport wins
+# whenever one is plugged in; a connected/saved wireless endpoint is the fallback.
+# ANDROID_SERIAL is exported so bare `adb ...` calls stay unambiguous when the
+# same phone is connected over both transports at once. A pre-set ANDROID_SERIAL
+# pointing at an online device always wins (manual override).
+select_device() {
+    if [[ -n "${ANDROID_SERIAL:-}" ]] \
+        && [[ "$(adb -s "$ANDROID_SERIAL" get-state 2>/dev/null || true)" == "device" ]]; then
+        echo "Using ANDROID_SERIAL=$ANDROID_SERIAL"
+        return 0
+    fi
+
+    local serial
+    serial="$(usb_device_serial)"
+    if [[ -n "$serial" ]]; then
+        export ANDROID_SERIAL="$serial"
+        echo "Using USB device $serial"
+        return 0
+    fi
+
+    serial="$(remote_device_serial)"
+    if [[ -n "$serial" ]]; then
+        export ANDROID_SERIAL="$serial"
+        echo "Using wireless device $serial"
+        return 0
+    fi
+
+    return 1
 }
 
 require_device() {
     adb start-server >/dev/null 2>&1 || true
 
-    if [[ -n "$(device_state)" ]]; then
+    if select_device; then
         return 0
     fi
 
@@ -103,7 +146,7 @@ require_device() {
 
     try_wireless_reconnect || true
 
-    if [[ -n "$(device_state)" ]]; then
+    if select_device; then
         return 0
     fi
 
@@ -232,9 +275,11 @@ cmd_devices() {
 }
 
 cmd_ensure_device() {
+    # Select the device first so cleanup targets it (and never trips over
+    # multiple transports when the phone is on USB + WiFi simultaneously).
+    require_device
     adb shell am clear-debug-app >/dev/null 2>&1 || true
     adb forward --remove-all >/dev/null 2>&1 || true
-    require_device
     adb devices -l
 }
 
@@ -249,8 +294,10 @@ cmd_wireless_pair() {
 }
 
 cmd_wireless_connect() {
-    if [[ -n "$(device_state)" ]]; then
-        echo "adb device already connected:"
+    # Only bail out early if a wireless device is already connected — a USB-only
+    # connection must not block an explicit `wireless connect`.
+    if [[ -n "$(remote_device_serial)" ]]; then
+        echo "Wireless adb device already connected:"
         adb devices -l
         return 0
     fi
@@ -268,7 +315,7 @@ cmd_wireless_connect() {
     adb connect "$endpoint"
     echo "---"
     adb devices -l
-    if [[ -z "$(device_state)" ]]; then
+    if [[ -z "$(remote_device_serial)" ]]; then
         echo "Connect failed. Check phone IP/port and that WSL can reach the phone." >&2
         exit 1
     fi
