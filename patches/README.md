@@ -45,7 +45,7 @@ Name format: `NNNN-short-description.patch` (kept in order by `NNNN`).
 
 ## Current queue
 
-Seven patches ported from [Kenji-NX `libryujinx_bionic`](https://git.ryujinx.app/projects/Kenji-NX/src/branch/libryujinx_bionic) onto the Ryubing pin (`dc06d0de` / Canary-1.3.335). The phantom upstream commits cited in older pins never landed on Ryubing master. Patches 0006–0007 are Ryubing-native (NativeAOT shader SSA crash). Patch 0008 adds Kenji-style Android surface rotation (identity Vulkan preTransform + buffer transform in the JNI shim).
+Queue is maintained against the current pin in [`compat/pins.json`](../compat/pins.json) (now `475615f04` / Canary-1.3.351; 10 patches). Originally ported from [Kenji-NX `libryujinx_bionic`](https://git.ryujinx.app/projects/Kenji-NX/src/branch/libryujinx_bionic), then independently re-validated per pin bump — Kenji is a reference for *which* bionic failures exist, never a copy-paste source. Patches 0006–0007 are Ryubing-native (NativeAOT shader SSA crash). Patch 0008 adds Kenji-style Android surface rotation (identity Vulkan preTransform + buffer transform in the JNI shim). Patch 0003 was regenerated for Canary-1.3.351 (upstream added a `using ARMeilleure.Translation.PTC` to the two JIT context files).
 
 | Patch | Concern |
 |-------|---------|

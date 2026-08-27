@@ -1,4 +1,4 @@
-From b63e4a19898923671d86c989074e018cef618ff8 Mon Sep 17 00:00:00 2001
+From ae73a966bf5e1302f544736ee5efe85919a5f9c7 Mon Sep 17 00:00:00 2001
 From: Jochem Kuipers <jochem@kuipers.cc>
 Date: Wed, 22 Jul 2026 13:03:02 +0200
 Subject: [PATCH] android: disable sparse JIT tables and honor bionic in
@@ -40,18 +40,18 @@ index 3c30a7f60..36bac2307 100644
                      // Do a nanosleep.
                      now = PerformanceCounter.ElapsedTicks;
 diff --git a/src/Ryujinx.Cpu/Jit/JitCpuContext.cs b/src/Ryujinx.Cpu/Jit/JitCpuContext.cs
-index e967b799a..0601fbdaf 100644
+index b9867ff06..718786c29 100644
 --- a/src/Ryujinx.Cpu/Jit/JitCpuContext.cs
 +++ b/src/Ryujinx.Cpu/Jit/JitCpuContext.cs
-@@ -1,6 +1,7 @@
- using ARMeilleure.Common;
+@@ -2,6 +2,7 @@ using ARMeilleure.Common;
  using ARMeilleure.Memory;
  using ARMeilleure.Translation;
+ using ARMeilleure.Translation.PTC;
 +using Ryujinx.Common;
  using Ryujinx.Cpu.Signal;
  
  namespace Ryujinx.Cpu.Jit
-@@ -14,7 +15,8 @@ namespace Ryujinx.Cpu.Jit
+@@ -15,7 +16,8 @@ namespace Ryujinx.Cpu.Jit
          {
              _tickSource = tickSource;
              
@@ -62,17 +62,18 @@ index e967b799a..0601fbdaf 100644
              
              _translator = new Translator(new JitMemoryAllocator(forJit: true), memory, functionTable);
 diff --git a/src/Ryujinx.Cpu/LightningJit/LightningJitCpuContext.cs b/src/Ryujinx.Cpu/LightningJit/LightningJitCpuContext.cs
-index 185a296e2..7c26ff164 100644
+index 17946388a..37ef3b414 100644
 --- a/src/Ryujinx.Cpu/LightningJit/LightningJitCpuContext.cs
 +++ b/src/Ryujinx.Cpu/LightningJit/LightningJitCpuContext.cs
-@@ -1,5 +1,6 @@
+@@ -1,6 +1,7 @@
  using ARMeilleure.Common;
  using ARMeilleure.Memory;
+ using ARMeilleure.Translation.PTC;
 +using Ryujinx.Common;
  using Ryujinx.Cpu.Jit;
  using Ryujinx.Cpu.LightningJit.State;
  
-@@ -14,7 +15,8 @@ namespace Ryujinx.Cpu.LightningJit
+@@ -15,7 +16,8 @@ namespace Ryujinx.Cpu.LightningJit
          {
              _tickSource = tickSource;
  
@@ -83,5 +84,5 @@ index 185a296e2..7c26ff164 100644
              
              _translator = new Translator(memory, functionTable);
 -- 
-2.55.0
+2.53.0
 

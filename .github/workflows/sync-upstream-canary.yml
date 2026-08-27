@@ -1,12 +1,11 @@
 name: Sync upstream canary
 
-# Weekly canary: pull the latest upstream Ryubing, re-apply the Android patch queue,
-# and smoke-build the emulator core. This is the early-warning system for upstream
-# changes that break the port — it opens/refreshes a PR rather than pushing to main.
+# On demand only (no schedule until the pin-bump pattern is proven over a few cycles):
+# pull a chosen upstream Ryubing ref, re-apply the Android patch queue, and smoke-build
+# the emulator core. This is the early-warning system for upstream changes that break
+# the port — it opens/refreshes a PR rather than pushing to main.
 
 on:
-  schedule:
-    - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:
     inputs:
       ref:
