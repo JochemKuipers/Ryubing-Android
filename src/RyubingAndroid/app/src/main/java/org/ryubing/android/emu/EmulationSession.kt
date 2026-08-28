@@ -235,6 +235,17 @@ class EmulationSession(
         }
     }
 
+    /** Returns the active user's existing account-save ID for [titleIdHex], or null. */
+    fun findUserSaveId(titleIdHex: String): String? {
+        val titleId = titleIdHex.toULongOrNull(16) ?: return null
+        initialize()
+        return RyubingNative.core.ryubing_find_user_save_id(titleId.toLong())
+            .toULong()
+            .takeIf { it != 0uL }
+            ?.toString(16)
+            ?.padStart(16, '0')
+    }
+
     // --- Hotkeys ---
 
     fun performHotkey(action: HotkeyAction) {

@@ -65,6 +65,7 @@ object RyubingNative {
         fun ryubing_query_application_info(path: String, displayName: String, outJsonPath: String): Int
         fun ryubing_probe_title_update(path: String, displayName: String, outJsonPath: String): Int
         fun ryubing_get_dlc_content_list(path: String, displayName: String, titleId: Long, outJsonPath: String): Int
+        fun ryubing_find_user_save_id(titleId: Long): Long
         fun ryubing_reload_keys()
         fun ryubing_install_firmware(path: String): Int
         fun ryubing_set_button_state(buttonMask: Int)

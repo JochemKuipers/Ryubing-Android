@@ -1,6 +1,9 @@
 using LibRyubing.Input;
 using LibRyubing.Platform;
 using OpenTK.Audio.OpenAL;
+using LibHac.Common;
+using LibHac.Fs;
+using LibHac.Fs.Shim;
 using Ryujinx.Audio.Backends.OpenAL;
 using Ryujinx.Audio.Integration;
 using Ryujinx.Common;
@@ -29,6 +32,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ARMeilleure;
+using Path = System.IO.Path;
 
 namespace LibRyubing
 {
@@ -148,6 +152,27 @@ namespace LibRyubing
 
             _virtualFileSystem.ReloadKeySet();
             Logger.Notice.Print(LogClass.Application, "Reloaded key set.");
+        }
+
+        /// <summary>Returns the existing account-save ID for a title, or zero when none exists.</summary>
+        public static ulong FindUserSaveId(ulong titleId)
+        {
+            if (_libHacHorizonManager == null || _accountManager == null)
+            {
+                return 0;
+            }
+
+            SaveDataFilter filter = SaveDataFilter.Make(
+                titleId,
+                SaveDataType.Account,
+                _accountManager.LastOpenedUser.UserId.ToLibHac(),
+                saveDataId: default,
+                index: default);
+            LibHac.Result result = _libHacHorizonManager.RyujinxClient.Fs.FindSaveDataWithFilter(
+                out SaveDataInfo info,
+                SaveDataSpaceId.User,
+                in filter);
+            return result.IsSuccess() ? info.SaveDataId : 0;
         }
 
         /// <summary>

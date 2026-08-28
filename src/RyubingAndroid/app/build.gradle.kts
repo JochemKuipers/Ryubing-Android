@@ -98,4 +98,6 @@ dependencies {
 
     // JNA for calling the libryubing.so C ABI from Kotlin.
     implementation("net.java.dev.jna:jna:5.15.0@aar")
+
+    testImplementation("junit:junit:4.13.2")
 }

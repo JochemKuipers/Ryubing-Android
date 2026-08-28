@@ -73,8 +73,23 @@ fun GameLibraryScreen(
     var menuFor by remember { mutableStateOf<GameEntry?>(null) }
     var manageUpdatesFor by remember { mutableStateOf<GameEntry?>(null) }
     var manageDlcFor by remember { mutableStateOf<GameEntry?>(null) }
+    var manageModsFor by remember { mutableStateOf<GameEntry?>(null) }
+    var manageSavesFor by remember { mutableStateOf<GameEntry?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    fun withTitleId(game: GameEntry, action: () -> Unit) {
+        menuFor = null
+        if (game.titleId.isBlank()) {
+            Toast.makeText(
+                context,
+                "Title ID unknown — install keys and refresh",
+                Toast.LENGTH_SHORT,
+            ).show()
+        } else {
+            action()
+        }
+    }
 
     fun refreshLibrary() {
         scope.launch {
@@ -274,33 +289,19 @@ fun GameLibraryScreen(
                             ) {
                                 DropdownMenuItem(
                                     text = { Text("Manage Updates") },
-                                    onClick = {
-                                        menuFor = null
-                                        if (game.titleId.isBlank()) {
-                                            Toast.makeText(
-                                                context,
-                                                "Title ID unknown — install keys and refresh",
-                                                Toast.LENGTH_SHORT,
-                                            ).show()
-                                        } else {
-                                            manageUpdatesFor = game
-                                        }
-                                    },
+                                    onClick = { withTitleId(game) { manageUpdatesFor = game } },
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Manage DLC") },
-                                    onClick = {
-                                        menuFor = null
-                                        if (game.titleId.isBlank()) {
-                                            Toast.makeText(
-                                                context,
-                                                "Title ID unknown — install keys and refresh",
-                                                Toast.LENGTH_SHORT,
-                                            ).show()
-                                        } else {
-                                            manageDlcFor = game
-                                        }
-                                    },
+                                    onClick = { withTitleId(game) { manageDlcFor = game } },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Manage Mods") },
+                                    onClick = { withTitleId(game) { manageModsFor = game } },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Manage Saves") },
+                                    onClick = { withTitleId(game) { manageSavesFor = game } },
                                 )
                             }
                         }
@@ -334,6 +335,25 @@ fun GameLibraryScreen(
                 manageDlcFor = null
                 refreshContentDetails()
             },
+        )
+    }
+
+    manageModsFor?.let { game ->
+        ModDialog(
+            titleId = game.titleId,
+            gameTitle = game.title,
+            appDataPath = appDataPath,
+            onDismiss = { manageModsFor = null },
+        )
+    }
+
+    manageSavesFor?.let { game ->
+        SaveDialog(
+            titleId = game.titleId,
+            gameTitle = game.title,
+            appDataPath = appDataPath,
+            session = session,
+            onDismiss = { manageSavesFor = null },
         )
     }
 }
