@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import org.ryubing.android.data.ControllerMappingRepository
+import org.ryubing.android.data.AppLifecycleStore
 import org.ryubing.android.data.DataFolderResolver
 import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.GamepadHotkeyRepository
@@ -34,6 +35,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val gameRepo = GameRepository(applicationContext)
+        val lifecycleStore = AppLifecycleStore(applicationContext)
+        val systemDriverCrashed = lifecycleStore.consumeSystemDriverCrash()
+        val initialGame = lifecycleStore.consumePendingLaunch()
         settingsRepository = SettingsRepository(applicationContext)
         mappingRepository = ControllerMappingRepository(applicationContext)
         hotkeyRepository = GamepadHotkeyRepository(applicationContext)
@@ -47,6 +51,7 @@ class MainActivity : ComponentActivity() {
             dataDir.absolutePath,
             contentResolver,
             driverRepo,
+            lifecycleStore,
         )
         refreshPhysicalGamepad()
 
@@ -60,6 +65,9 @@ class MainActivity : ComponentActivity() {
                     driverRepository = driverRepo,
                     session = session,
                     appDataPath = dataDir.absolutePath,
+                    lifecycleStore = lifecycleStore,
+                    initialGame = initialGame,
+                    systemDriverCrashed = systemDriverCrashed,
                     onControllerMappingChanged = ::refreshPhysicalGamepad,
                     onHotkeysChanged = ::refreshPhysicalGamepad,
                 )

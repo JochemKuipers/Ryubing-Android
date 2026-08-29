@@ -35,7 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ryubing.android.data.ContentMetadataStore
-import org.ryubing.android.data.SafPathResolver
+import org.ryubing.android.data.ContentFileStore
 import org.ryubing.android.data.TitleUpdateMetadata
 import org.ryubing.android.emu.EmulationSession
 import java.io.File
@@ -74,12 +74,7 @@ fun TitleUpdateDialog(
                 return@launch
             }
             val path = withContext(Dispatchers.IO) {
-                SafPathResolver.resolve(context, uri) ?: run {
-                    val destDir = File(ContentMetadataStore.gamesDir(appDataPath, titleId), "updates")
-                    val dest = File(destDir, name)
-                    session.copyUriTo(uri, dest)
-                    dest.absolutePath
-                }
+                ContentFileStore.copyUri(session, uri, appDataPath, titleId, "updates", name)
             }
             if (path in metadata.paths) {
                 Toast.makeText(context, "Already added", Toast.LENGTH_SHORT).show()

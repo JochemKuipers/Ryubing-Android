@@ -1,5 +1,6 @@
 package org.ryubing.android.data
 
+import android.app.ActivityManager
 import android.content.Context
 import androidx.core.content.edit
 
@@ -7,12 +8,12 @@ import androidx.core.content.edit
  * Persists [EmulatorConfig] via SharedPreferences. Simple by design; a richer store can
  * replace this later without touching the emulator glue.
  */
-class SettingsRepository(context: Context) {
+class SettingsRepository(private val context: Context) {
 
     private val prefs = context.getSharedPreferences("ryubing_settings", Context.MODE_PRIVATE)
 
     fun load(): EmulatorConfig = EmulatorConfig(
-        memoryConfiguration = prefs.getInt(KEY_MEM_CONFIG, 0),
+        memoryConfiguration = prefs.getInt(KEY_MEM_CONFIG, defaultMemoryConfiguration()),
         memoryManagerMode = prefs.getInt(KEY_MEM_MODE, 2),
         systemLanguage = prefs.getInt(KEY_LANGUAGE, 1),
         systemRegion = prefs.getInt(KEY_REGION, 1),
@@ -40,6 +41,7 @@ class SettingsRepository(context: Context) {
         enableTextureRecompression = prefs.getBoolean(KEY_TEXTURE_RECOMPRESSION, false),
         enableMacroHle = prefs.getBoolean(KEY_MACRO_HLE, true),
         enableColorSpacePassthrough = prefs.getBoolean(KEY_COLOR_SPACE, false),
+        enableSpirvCompilationOnVulkan = prefs.getBoolean(KEY_SPIRV, true),
         enableFileLog = prefs.getBoolean(KEY_FILE_LOG, false),
         audioVolume = prefs.getFloat(KEY_AUDIO_VOLUME, 1f),
         audioMuted = prefs.getBoolean(KEY_AUDIO_MUTED, false),
@@ -57,7 +59,9 @@ class SettingsRepository(context: Context) {
         dataFolderCustomPath = prefs.getString(KEY_DATA_FOLDER_CUSTOM_PATH, "") ?: "",
     )
 
-    fun save(config: EmulatorConfig) = prefs.edit {
+    // commit(): callers (data-folder change) restart the process immediately afterwards,
+    // and apply()'s background flush can lose the write when the process is killed.
+    fun save(config: EmulatorConfig) = prefs.edit(commit = true) {
         putInt(KEY_MEM_CONFIG, config.memoryConfiguration)
         putInt(KEY_MEM_MODE, config.memoryManagerMode)
         putInt(KEY_LANGUAGE, config.systemLanguage)
@@ -86,6 +90,7 @@ class SettingsRepository(context: Context) {
         putBoolean(KEY_TEXTURE_RECOMPRESSION, config.enableTextureRecompression)
         putBoolean(KEY_MACRO_HLE, config.enableMacroHle)
         putBoolean(KEY_COLOR_SPACE, config.enableColorSpacePassthrough)
+        putBoolean(KEY_SPIRV, config.enableSpirvCompilationOnVulkan)
         putBoolean(KEY_FILE_LOG, config.enableFileLog)
         putFloat(KEY_AUDIO_VOLUME, config.audioVolume)
         putBoolean(KEY_AUDIO_MUTED, config.audioMuted)
@@ -101,6 +106,18 @@ class SettingsRepository(context: Context) {
         putString(KEY_UPDATES_FOLDER_URI, config.updatesFolderUri)
         putInt(KEY_DATA_FOLDER_MODE, config.dataFolderMode)
         putString(KEY_DATA_FOLDER_CUSTOM_PATH, config.dataFolderCustomPath)
+    }
+
+    /**
+     * 6 GiB guest DRAM on devices with at least 8 GiB of RAM; retail 4 GiB otherwise.
+     * Pokémon-scale titles hit MapPhysicalMemory limits at 4 GiB when DLC is installed.
+     */
+    private fun defaultMemoryConfiguration(): Int {
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            ?: return 0
+        val info = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(info)
+        return if (info.totalMem >= 8L * 1024 * 1024 * 1024) 1 else 0
     }
 
     private companion object {
@@ -132,6 +149,7 @@ class SettingsRepository(context: Context) {
         const val KEY_TEXTURE_RECOMPRESSION = "texture_recompression"
         const val KEY_MACRO_HLE = "macro_hle"
         const val KEY_COLOR_SPACE = "color_space"
+        const val KEY_SPIRV = "spirv"
         const val KEY_FILE_LOG = "file_log"
         const val KEY_AUDIO_VOLUME = "audio_volume"
         const val KEY_AUDIO_MUTED = "audio_muted"

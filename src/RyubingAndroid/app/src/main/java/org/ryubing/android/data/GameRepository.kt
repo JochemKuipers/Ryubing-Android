@@ -27,7 +27,7 @@ data class GameEntry(
  * Tracks user-selected game folders (persisted SAF tree URIs) and enumerates the
  * loadable dumps inside them.
  */
-class GameRepository(private val context: Context) {
+class GameRepository(val context: Context) {
 
     private val prefs = context.getSharedPreferences("ryubing_games", Context.MODE_PRIVATE)
     private val metaPrefs = context.getSharedPreferences("ryubing_game_meta", Context.MODE_PRIVATE)

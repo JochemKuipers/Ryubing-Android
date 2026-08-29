@@ -10,6 +10,7 @@ import org.json.JSONObject
 import org.ryubing.android.R
 import org.ryubing.android.RyubingNative
 import org.ryubing.android.data.DriverRepository
+import org.ryubing.android.data.AppLifecycleStore
 import org.ryubing.android.data.EmulatorConfig
 import org.ryubing.android.data.GameEntry
 import org.ryubing.android.input.HotkeyAction
@@ -27,6 +28,7 @@ class EmulationSession(
     private val appDataPath: String,
     private val contentResolver: ContentResolver,
     private val driverRepository: DriverRepository,
+    private val lifecycleStore: AppLifecycleStore,
 ) {
 
     private val buttonState = AtomicInteger(0)
@@ -82,6 +84,7 @@ class EmulationSession(
                 config.enableTextureRecompression.toInt(),
                 config.enableMacroHle.toInt(),
                 config.enableColorSpacePassthrough.toInt(),
+                config.enableSpirvCompilationOnVulkan.toInt(),
             )
             ryubing_set_audio_volume(if (config.audioMuted) 0f else config.audioVolume)
             ryubing_set_enable_file_log(config.enableFileLog.toInt())
@@ -125,14 +128,16 @@ class EmulationSession(
         romFd = pfd
         val fdPath = "/proc/self/fd/${pfd.fd}"
 
-        VulkanDriverLoader.apply(
+        val driverHandle = VulkanDriverLoader.apply(
             appContext,
             driverRepository,
             appContext.getString(R.string.system_driver),
         )
+        lifecycleStore.markSessionStarted(systemDriver = driverHandle == 0L)
 
         val ok = RyubingNative.core.ryubing_load_application(fdPath, game.fileName) == 1
         if (!ok) {
+            lifecycleStore.markSessionStopped()
             Log.e(TAG, "Failed to load ${game.title} ($fdPath)")
             closeRomFd()
         }

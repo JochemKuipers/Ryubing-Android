@@ -6,6 +6,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import org.ryubing.android.data.ControllerMappingRepository
+import org.ryubing.android.ProcessRestarter
+import org.ryubing.android.data.AppLifecycleStore
 import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.GamepadHotkeyRepository
 import org.ryubing.android.data.GameEntry
@@ -29,10 +31,16 @@ fun RyubingApp(
     driverRepository: DriverRepository,
     session: EmulationSession,
     appDataPath: String,
+    lifecycleStore: AppLifecycleStore,
+    initialGame: GameEntry?,
+    systemDriverCrashed: Boolean,
     onControllerMappingChanged: () -> Unit,
     onHotkeysChanged: () -> Unit,
 ) {
-    var screen: Screen by remember { mutableStateOf(Screen.Library) }
+    var screen: Screen by remember {
+        mutableStateOf(initialGame?.let(Screen::Emulation) ?: Screen.Library)
+    }
+    var openDrivers by remember { mutableStateOf(false) }
 
     when (val current = screen) {
         is Screen.Library -> GameLibraryScreen(
@@ -40,8 +48,16 @@ fun RyubingApp(
             settingsRepository = settingsRepository,
             session = session,
             appDataPath = appDataPath,
+            systemDriverCrashed = systemDriverCrashed,
             onOpenSettings = { screen = Screen.Settings },
-            onPlay = { screen = Screen.Emulation(it) },
+            onOpenDrivers = {
+                openDrivers = true
+                screen = Screen.Settings
+            },
+            onPlay = { game ->
+                lifecycleStore.queueLaunch(game)
+                ProcessRestarter.restart(gameRepository.context)
+            },
         )
 
         is Screen.Settings -> SettingsScreen(
@@ -50,9 +66,13 @@ fun RyubingApp(
             hotkeyRepository = hotkeyRepository,
             driverRepository = driverRepository,
             session = session,
+            initialDrivers = openDrivers,
             onMappingChanged = onControllerMappingChanged,
             onHotkeysChanged = onHotkeysChanged,
-            onBack = { screen = Screen.Library },
+            onBack = {
+                openDrivers = false
+                screen = Screen.Library
+            },
         )
 
         is Screen.Emulation -> EmulationScreen(
@@ -60,8 +80,8 @@ fun RyubingApp(
             session = session,
             config = settingsRepository.load(),
             onExit = {
-                // Navigate first — stop is async in EmulationScreen.dispose to avoid ANR.
-                screen = Screen.Library
+                // Intentional restart: fresh process per session (clean VA space, driver state).
+                ProcessRestarter.restart(gameRepository.context)
             },
         )
     }

@@ -59,7 +59,8 @@ class DriverRepository(private val context: Context) {
     fun saveSelectedId(id: String): Boolean {
         val previous = loadSelectedId()
         if (previous == id) return false
-        prefs.edit { putString(KEY_SELECTED_ID, id) }
+        // commit(): the driver screen restarts the process right after this returns.
+        prefs.edit(commit = true) { putString(KEY_SELECTED_ID, id) }
         // Disk shader caches are driver-specific (Eden wipes them on driver change).
         clearAllShaderCaches()
         return true
@@ -262,7 +263,9 @@ class DriverRepository(private val context: Context) {
                     .put("libraryName", driver.libraryName),
             )
         }
-        prefs.edit { putString(KEY_IMPORTED, array.toString()) }
+        // commit(): an import may be followed immediately by a process restart, and a lost
+        // apply() would drop the newly imported driver from the list entirely.
+        prefs.edit(commit = true) { putString(KEY_IMPORTED, array.toString()) }
     }
 
     private companion object {

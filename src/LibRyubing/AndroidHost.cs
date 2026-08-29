@@ -232,6 +232,7 @@ namespace LibRyubing
             GraphicsConfig.EnableMacroHLE = settings.EnableMacroHLE;
             GraphicsConfig.EnableTextureRecompression = settings.EnableTextureRecompression;
             GraphicsConfig.EnableColorSpacePassthrough = settings.EnableColorSpacePassthrough;
+            GraphicsConfig.EnableSpirvCompilationOnVulkan = settings.EnableSpirvCompilationOnVulkan;
 
             Optimizations.LowPower = settings.EnableLowPowerPtc;
 

@@ -97,7 +97,8 @@ namespace LibRyubing
             int scalingFilterLevel,
             int enableTextureRecompression,
             int enableMacroHle,
-            int enableColorSpacePassthrough)
+            int enableColorSpacePassthrough,
+            int enableSpirvCompilation)
         {
             _settings.VSyncMode = (VSyncMode)vsyncMode;
             _settings.CustomVSyncInterval = customVSyncInterval;
@@ -110,6 +111,7 @@ namespace LibRyubing
             _settings.EnableTextureRecompression = enableTextureRecompression != 0;
             _settings.EnableMacroHLE = enableMacroHle != 0;
             _settings.EnableColorSpacePassthrough = enableColorSpacePassthrough != 0;
+            _settings.EnableSpirvCompilationOnVulkan = enableSpirvCompilation != 0;
         }
 
         [UnmanagedCallersOnly(EntryPoint = "ryubing_set_audio_volume")]

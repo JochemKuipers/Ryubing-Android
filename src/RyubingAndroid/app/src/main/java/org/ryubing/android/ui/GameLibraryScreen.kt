@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -32,6 +33,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -53,6 +55,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ryubing.android.R
+import org.ryubing.android.data.ContentFileStore
 import org.ryubing.android.data.ContentAutoloader
 import org.ryubing.android.data.GameEntry
 import org.ryubing.android.data.GameRepository
@@ -66,7 +69,9 @@ fun GameLibraryScreen(
     settingsRepository: SettingsRepository,
     session: EmulationSession,
     appDataPath: String,
+    systemDriverCrashed: Boolean,
     onOpenSettings: () -> Unit,
+    onOpenDrivers: () -> Unit,
     onPlay: (GameEntry) -> Unit,
 ) {
     var games by remember { mutableStateOf(repository.scanGames()) }
@@ -75,6 +80,7 @@ fun GameLibraryScreen(
     var manageDlcFor by remember { mutableStateOf<GameEntry?>(null) }
     var manageModsFor by remember { mutableStateOf<GameEntry?>(null) }
     var manageSavesFor by remember { mutableStateOf<GameEntry?>(null) }
+    var showDriverCrash by remember { mutableStateOf(systemDriverCrashed) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -125,6 +131,22 @@ fun GameLibraryScreen(
                             }
                         }
                     }
+
+                    // Best-effort: move update/DLC content registered on shared (FUSE)
+                    // storage into app-private storage so the core reads it without
+                    // per-page FUSE overhead during play.
+                    enriched.forEach { game ->
+                        if (game.titleId.isBlank()) return@forEach
+                        runCatching { ContentFileStore.localizeRegisteredContent(appDataPath, game.titleId) }
+                            .onFailure {
+                                android.util.Log.w("GameLibrary", "Content migration failed for ${game.title}", it)
+                            }
+                    }
+
+                    // Publish update/DLC counts first (no native probing) so autoloaded
+                    // content appears with the toast; then refine with probed versions.
+                    val counted = repository.applyContentMetadata(enriched, appDataPath, session = null)
+                    withContext(Dispatchers.Main) { games = counted }
 
                     val detailed = repository.applyContentMetadata(enriched, appDataPath, session)
                     withContext(Dispatchers.Main) { games = detailed }
@@ -354,6 +376,28 @@ fun GameLibraryScreen(
             appDataPath = appDataPath,
             session = session,
             onDismiss = { manageSavesFor = null },
+        )
+    }
+
+    if (showDriverCrash) {
+        AlertDialog(
+            onDismissRequest = { showDriverCrash = false },
+            title = { Text("System GPU driver crashed") },
+            text = {
+                Text(
+                    "The Qualcomm system driver crashed while compiling a shader. " +
+                        "Use a device-specific Turnip driver for better compatibility.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDriverCrash = false
+                        onOpenDrivers()
+                    },
+                ) { Text("Open GPU drivers") }
+            },
+            dismissButton = { TextButton(onClick = { showDriverCrash = false }) { Text("Dismiss") } },
         )
     }
 }

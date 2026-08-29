@@ -56,6 +56,7 @@ object RyubingNative {
             enableTextureRecompression: Int,
             enableMacroHle: Int,
             enableColorSpacePassthrough: Int,
+            enableSpirvCompilation: Int,
         )
         fun ryubing_set_audio_volume(volume: Float)
         fun ryubing_set_enable_file_log(enable: Int)

@@ -84,7 +84,10 @@ class ContentAutoloader(
     ): AssociateResult {
         SafPathResolver.resolve(context, doc.uri)?.let { real ->
             Log.d(TAG, "Resolved $name -> $real")
-            return tryAssociate(real, name, gamesByTid)
+            val preview = classify(real, name, gamesByTid)
+            if (preview == AssociateResult.None) return AssociateResult.None
+            val durable = copyFileToDurable(real, name, durableRoot) ?: return AssociateResult.None
+            return tryAssociate(durable, name, gamesByTid)
         }
 
         // Probe via fd without copying; copy only if something matches.
@@ -140,6 +143,11 @@ class ContentAutoloader(
 
         val meta = ContentMetadataStore.loadUpdates(appDataPath, baseTid)
         if (path in meta.paths) return AssociateResult.None
+        // Same content may already be registered under a different location (e.g. after
+        // migration into app storage); dedupe by file name so autoload doesn't duplicate it.
+        if (meta.paths.any { File(it).name.equals(File(path).name, ignoreCase = true) }) {
+            return AssociateResult.None
+        }
         meta.paths.add(path)
         val shouldSelect = if (meta.selected.isEmpty()) {
             true
@@ -156,6 +164,10 @@ class ContentAutoloader(
     private fun mergeDlc(titleId: String, containerPath: String, probeJson: String): Boolean {
         val existing = ContentMetadataStore.loadDlc(appDataPath, titleId)
         if (existing.any { it.path == containerPath }) return false
+        // Dedupe by file name as well (migration may have relocated a registered container).
+        if (existing.any { File(it.path).name.equals(File(containerPath).name, ignoreCase = true) }) {
+            return false
+        }
 
         val probed = ContentMetadataStore.parseDlcArray(JSONArray(probeJson))
         existing.addAll(probed.filter { it.path.isNotBlank() })
@@ -177,6 +189,17 @@ class ContentAutoloader(
             Log.e(TAG, "Failed to copy $name for autoload", e)
             null
         }
+    }
+
+    private fun copyFileToDurable(path: String, name: String, durableRoot: File): String? {
+        val source = File(path)
+        val safeName = name.replace(Regex("[^A-Za-z0-9._\\-]"), "_")
+        val destination = File(durableRoot, safeName)
+        if (destination.isFile && destination.length() == source.length()) return destination.absolutePath
+        return runCatching {
+            source.copyTo(destination, overwrite = true)
+            destination.absolutePath
+        }.onFailure { Log.e(TAG, "Failed to copy $name for autoload", it) }.getOrNull()
     }
 
     private fun walkFiles(root: DocumentFile): Sequence<DocumentFile> = sequence {

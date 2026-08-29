@@ -70,6 +70,12 @@ namespace LibRyubing
 
         public bool EnableColorSpacePassthrough { get; set; }
 
+        /// <summary>
+        /// Generate shaders directly as SPIR-V. Disable to fall back to the GLSL path on
+        /// drivers whose compilers reject the direct SPIR-V output.
+        /// </summary>
+        public bool EnableSpirvCompilationOnVulkan { get; set; } = true;
+
         public bool EnableFileLog { get; set; }
 
         public float AudioVolume { get; set; } = 1f;

@@ -1,6 +1,5 @@
 package org.ryubing.android.ui
 
-import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -52,6 +51,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ryubing.android.R
+import org.ryubing.android.ProcessRestarter
 import org.ryubing.android.data.ControllerMappingRepository
 import org.ryubing.android.data.DataFolderResolver
 import org.ryubing.android.data.DriverRepository
@@ -83,12 +83,15 @@ fun SettingsScreen(
     hotkeyRepository: GamepadHotkeyRepository,
     driverRepository: DriverRepository,
     session: EmulationSession,
+    initialDrivers: Boolean = false,
     onMappingChanged: () -> Unit,
     onHotkeysChanged: () -> Unit,
     onBack: () -> Unit,
 ) {
     var config by remember { mutableStateOf(repository.load()) }
-    var category by remember { mutableStateOf<SettingsCategory?>(null) }
+    var category by remember {
+        mutableStateOf(if (initialDrivers) SettingsCategory.Drivers else null)
+    }
     var showDriverFetcher by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -392,6 +395,9 @@ private fun GraphicsSettingsPage(config: EmulatorConfig, update: (EmulatorConfig
     )
     SwitchRow("Shader cache", config.enableShaderCache) {
         update(config.copy(enableShaderCache = it))
+    }
+    SwitchRow("SPIR-V shader generation", config.enableSpirvCompilationOnVulkan) {
+        update(config.copy(enableSpirvCompilationOnVulkan = it))
     }
     SwitchRow("Texture recompression", config.enableTextureRecompression) {
         update(config.copy(enableTextureRecompression = it))
@@ -845,12 +851,12 @@ private fun DataLocationPage(
                                         .onFailure { android.util.Log.e("DataLocation", "Migration failed", it) }
                                     update(newConfig)
                                 }
-                                restartApp(context)
+                                ProcessRestarter.restart(context)
                             }
                         } else {
                             pendingMode = null
                             update(newConfig)
-                            restartApp(context)
+                            ProcessRestarter.restart(context)
                         }
                     },
                 ) { Text(if (canCopy) "Copy data & restart" else "Apply & restart") }
@@ -861,7 +867,7 @@ private fun DataLocationPage(
                         onClick = {
                             pendingMode = null
                             update(newConfig)
-                            restartApp(context)
+                            ProcessRestarter.restart(context)
                         },
                     ) { Text("Apply without copying") }
                 } else {
@@ -881,13 +887,6 @@ private fun DataLocationPage(
             },
         )
     }
-}
-
-private fun restartApp(context: Context) {
-    val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-    intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-    context.startActivity(intent)
-    Runtime.getRuntime().exit(0)
 }
 
 @Composable

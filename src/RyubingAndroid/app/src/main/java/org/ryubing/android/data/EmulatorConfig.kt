@@ -43,6 +43,12 @@ data class EmulatorConfig(
     val enableTextureRecompression: Boolean = false,
     val enableMacroHle: Boolean = true,
     val enableColorSpacePassthrough: Boolean = false,
+    /**
+     * Generate shaders directly as SPIR-V (upstream default). Turning this off falls back
+     * to the GLSL translation path — a workaround for vendor drivers that crash compiling
+     * the direct SPIR-V output (e.g. some Qualcomm compute shaders).
+     */
+    val enableSpirvCompilationOnVulkan: Boolean = true,
     val enableFileLog: Boolean = false,
     val audioVolume: Float = 1f,
     val audioMuted: Boolean = false,

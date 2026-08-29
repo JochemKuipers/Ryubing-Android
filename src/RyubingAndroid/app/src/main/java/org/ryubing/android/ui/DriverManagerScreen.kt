@@ -80,7 +80,7 @@ fun DriversPanel(
                 selectedId = imported.id
                 val wiped = repository.saveSelectedId(imported.id)
                 statusMessage = if (wiped) {
-                    "Imported ${imported.displayName}. Shader caches cleared."
+                    "Imported ${imported.displayName}. Shader caches cleared; applies on next launch."
                 } else {
                     "Imported ${imported.displayName}"
                 }
@@ -128,8 +128,12 @@ fun DriversPanel(
                 onSelect = {
                     if (driver.id != selectedId) {
                         selectedId = driver.id
-                        repository.saveSelectedId(driver.id)
-                        statusMessage = "Selected ${driver.displayName}. Shader caches cleared."
+                        val wiped = repository.saveSelectedId(driver.id)
+                        statusMessage = if (wiped) {
+                            "Selected ${driver.displayName}. Shader caches cleared; applies on next launch."
+                        } else {
+                            "Selected ${driver.displayName}"
+                        }
                     }
                 },
                 onDelete = if (driver.isSystem) {
