@@ -43,6 +43,11 @@ jobs:
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           echo "toolchain=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_OUTPUT"
 
+      - name: Configure Git identity for patch queue
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
       - name: Apply upstream patch queue
         run: scripts/apply-patches.sh
 
