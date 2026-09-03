@@ -13,6 +13,11 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(adrenotools)
 
+# NCE backend (libryubing-nce.so): native code execution support used by the
+# managed core via P/Invoke. Built as a separate shared library; the JNI shim
+# takes a DT_NEEDED on it so loading ryubingjni pulls it in alongside the core.
+add_subdirectory(nce)
+
 add_library(ryubingjni SHARED
     ryubingjni.cpp
 )
@@ -32,8 +37,10 @@ set_target_properties(ryubing PROPERTIES IMPORTED_LOCATION "${RYUBING_CORE}")
 
 target_link_libraries(ryubingjni
     ryubing
+    ryubing-nce
     adrenotools
     ${log-lib}
     ${android-lib}
     ${vulkan-lib}
 )
+
