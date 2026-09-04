@@ -1,0 +1,680 @@
+From 0000000000000000000000000000000000000013 Mon Sep 17 00:00:00 2001
+From: Ryubing Android <ryubing-android@local>
+Date: Fri, 4 Sep 2026 21:00:00 +0200
+Subject: [PATCH 13/13] nce: HLE engine selection, loader patching and configuration
+
+Wire UseNce / CpuEngineFactory / INceModulePatcher / NceAddressSpaceWindow into
+HleConfiguration. ArmProcessContextFactory consumes the pre-reserved identity
+window (ARM64 host, 64-bit 39-bit guest, HostMapped, no gdbstub) and builds an
+identity-mapped MemoryManagerHostNoMirror plus the NCE engine; otherwise it
+falls back to LightningJit/JIT with a warning. ProcessLoaderHelper places code
+at window base + 0x8000000, grows NSO images for the patch section and patches
+them at load; ldr:ro does the same for NROs. Trampoline pages are flipped to
+CodeMutable so nnrtld's MOD0 scan does not chase patch code.
+
+diff --git a/src/Ryujinx.HLE/HOS/ArmProcessContextFactory.cs b/src/Ryujinx.HLE/HOS/ArmProcessContextFactory.cs
+index e6cec7af6..d7c0ab36f 100644
+--- a/src/Ryujinx.HLE/HOS/ArmProcessContextFactory.cs
++++ b/src/Ryujinx.HLE/HOS/ArmProcessContextFactory.cs
+@@ -77,16 +77,37 @@ namespace Ryujinx.HLE.HOS
+                     mode = MemoryManagerMode.SoftwarePageTable;
+                 }
+ 
+-                ICpuEngine cpuEngine = isArm64Host && (mode == MemoryManagerMode.HostMapped || mode == MemoryManagerMode.HostMappedUnsafe) && !context.Device.Configuration.EnableGdbStub
+-                    ? new LightningJitEngine(_tickSource)
+-                    : new JitEngine(_tickSource);
+-
+                 AddressSpace addressSpace = null;
+                 MemoryBlock asNoMirror = null;
++                MemoryBlock nceWindow = null;
++
++                HleConfiguration config = context.Device.Configuration;
++                bool hostMappedMode = mode == MemoryManagerMode.HostMapped || mode == MemoryManagerMode.HostMappedUnsafe;
++
++                // NCE runs guest code natively, so the guest address space must be identity
++                // mapped (guest VA == host pointer). The host reserves that window before the
++                // process exists (the loader needs its base to place code); we consume it here.
++                bool useNce = config.UseNce
++                    && config.CpuEngineFactory != null
++                    && config.NceAddressSpaceWindow != null
++                    && isArm64Host
++                    && for64Bit
++                    && addressSpaceSize == (1UL << 39)
++                    && hostMappedMode
++                    && MemoryBlock.GetPageSize() <= 0x1000
++                    && !config.EnableGdbStub;
++
++                if (useNce)
++                {
++                    nceWindow = config.NceAddressSpaceWindow;
++                    config.NceAddressSpaceWindow = null;
+ 
+-                // We want to use host tracked mode if the host page size is > 4KB.
+-                if ((mode == MemoryManagerMode.HostMapped || mode == MemoryManagerMode.HostMappedUnsafe) && MemoryBlock.GetPageSize() <= 0x1000)
++                    Logger.Info?.Print(LogClass.Cpu,
++                        $"NCE|AS base=0x{(ulong)nceWindow.Pointer:X} size=0x{nceWindow.Size:X} end=0x{(ulong)nceWindow.Pointer + nceWindow.Size:X} identity=1");
++                }
++                else if (hostMappedMode && MemoryBlock.GetPageSize() <= 0x1000)
+                 {
++                    // We want to use host tracked mode if the host page size is > 4KB.
+                     if (!AddressSpace.TryCreate(context.Memory, addressSpaceSize, out addressSpace) &&
+                         !AddressSpace.TryCreateWithoutMirror(addressSpaceSize, out asNoMirror))
+                     {
+@@ -96,6 +117,27 @@ namespace Ryujinx.HLE.HOS
+                     }
+                 }
+ 
++                ICpuEngine cpuEngine;
++                if (useNce)
++                {
++                    cpuEngine = config.CpuEngineFactory(_tickSource);
++                    Logger.Info?.Print(LogClass.Cpu, "Using NCE CPU backend");
++                }
++                else if (isArm64Host && hostMappedMode && mode != MemoryManagerMode.SoftwarePageTable && !config.EnableGdbStub)
++                {
++                    if (config.UseNce)
++                    {
++                        Logger.Warning?.Print(LogClass.Cpu,
++                            "NCE requested but prerequisites not met (need ARM64 host, 64-bit guest, HostMapped, reserved identity window); using LightningJit");
++                    }
++
++                    cpuEngine = new LightningJitEngine(_tickSource);
++                }
++                else
++                {
++                    cpuEngine = new JitEngine(_tickSource);
++                }
++
+                 switch (mode)
+                 {
+                     case MemoryManagerMode.SoftwarePageTable:
+@@ -105,7 +147,7 @@ namespace Ryujinx.HLE.HOS
+ 
+                     case MemoryManagerMode.HostMapped:
+                     case MemoryManagerMode.HostMappedUnsafe:
+-                        if (addressSpace == null && asNoMirror == null)
++                        if (addressSpace == null && asNoMirror == null && nceWindow == null)
+                         {
+                             MemoryManagerHostTracked memoryManagerHostTracked = new(context.Memory, addressSpaceSize, mode == MemoryManagerMode.HostMappedUnsafe, invalidAccessHandler);
+                             processContext = new ArmProcessContext<MemoryManagerHostTracked>(pid, cpuEngine, _gpu, memoryManagerHostTracked, addressSpaceSize, for64Bit);
+@@ -124,6 +166,11 @@ namespace Ryujinx.HLE.HOS
+                                 MemoryManagerHostMapped memoryManagerHostMapped = new(addressSpace, unsafeMode, invalidAccessHandler);
+                                 processContext = new ArmProcessContext<MemoryManagerHostMapped>(pid, cpuEngine, _gpu, memoryManagerHostMapped, addressSpace.AddressSpaceSize, for64Bit);
+                             }
++                            else if (nceWindow != null)
++                            {
++                                MemoryManagerHostNoMirror memoryManagerIdentity = new(nceWindow, context.Memory, unsafeMode, invalidAccessHandler, identityMapped: true);
++                                processContext = new ArmProcessContext<MemoryManagerHostNoMirror>(pid, cpuEngine, _gpu, memoryManagerIdentity, nceWindow.Size, for64Bit);
++                            }
+                             else
+                             {
+                                 MemoryManagerHostNoMirror memoryManagerHostNoMirror = new(asNoMirror, context.Memory, unsafeMode, invalidAccessHandler);
+diff --git a/src/Ryujinx.HLE/HOS/Services/Ro/IRoInterface.cs b/src/Ryujinx.HLE/HOS/Services/Ro/IRoInterface.cs
+index 873782d87..2f5f29ff6 100644
+--- a/src/Ryujinx.HLE/HOS/Services/Ro/IRoInterface.cs
++++ b/src/Ryujinx.HLE/HOS/Services/Ro/IRoInterface.cs
+@@ -186,6 +186,18 @@ namespace Ryujinx.HLE.HOS.Services.Ro
+             // Apply patches
+             context.Device.FileSystem.ModLoader.ApplyNroPatches(nro);
+ 
++            ulong patchReserve = 0;
++            INceModulePatcher ncePatcher = context.Device.Configuration.NceModulePatcher;
++            if (context.Device.Configuration.UseNce && ncePatcher != null)
++            {
++                uint imageSize = BitUtils.AlignUp(
++                    (uint)nro.Text.Length + (uint)nro.Ro.Length + (uint)nro.Data.Length + nro.BssSize,
++                    (uint)KPageTableBase.PageSize);
++                patchReserve = ncePatcher.EstimatePatchGrowth(
++                    imageSize, nro.TextOffset, (ulong)nro.Text.Length);
++                totalSize += (uint)patchReserve;
++            }
++
+             res = new NroInfo(
+                 nro,
+                 nroHash,
+@@ -193,7 +205,8 @@ namespace Ryujinx.HLE.HOS.Services.Ro
+                 nroSize,
+                 bssAddress,
+                 bssSize,
+-                (ulong)totalSize);
++                (ulong)totalSize,
++                patchReserve);
+ 
+             return ResultCode.Success;
+         }
+@@ -235,6 +248,29 @@ namespace Ryujinx.HLE.HOS.Services.Ro
+                     }
+                 }
+ 
++                // NCE PostData patch: allocate anonymous code pages after BSS.
++                if (info.PatchReserveSize > 0)
++                {
++                    ulong patchAddr = nroMappedAddress + info.NroSize + info.BssSize;
++                    ulong patchPages = info.PatchReserveSize / KPageTableBase.PageSize;
++                    Result patchMap = memMgr.MapPages(
++                        patchAddr,
++                        patchPages,
++                        MemoryState.ModCodeStatic,
++                        KMemoryPermission.ReadAndWrite);
++
++                    if (patchMap != Result.Success)
++                    {
++                        if (info.BssSize > 0)
++                        {
++                            memMgr.UnmapProcessCodeMemory(nroMappedAddress + info.NroSize, info.BssAddress, info.BssSize);
++                        }
++
++                        memMgr.UnmapProcessCodeMemory(nroMappedAddress, info.NroAddress, info.NroSize);
++                        return (ResultCode)patchMap.ErrorCode;
++                    }
++                }
++
+                 if (CanAddGuardRegionsInProcess(process, nroMappedAddress, info.TotalSize))
+                 {
+                     return ResultCode.Success;
+@@ -314,8 +350,13 @@ namespace Ryujinx.HLE.HOS.Services.Ro
+             return ResultCode.Success;
+         }
+ 
+-        private Result SetNroMemoryPermissions(KProcess process, NroExecutable relocatableObject, ulong baseAddress)
++        private Result SetNroMemoryPermissions(
++            KProcess process,
++            NroInfo info,
++            ulong baseAddress,
++            INceModulePatcher ncePatcher)
+         {
++            NroExecutable relocatableObject = info.Executable;
+             ulong textStart = baseAddress + relocatableObject.TextOffset;
+             ulong roStart = baseAddress + relocatableObject.RoOffset;
+             ulong dataStart = baseAddress + relocatableObject.DataOffset;
+@@ -324,26 +365,90 @@ namespace Ryujinx.HLE.HOS.Services.Ro
+ 
+             ulong bssEnd = BitUtils.AlignUp<ulong>(bssStart + relocatableObject.BssSize, KPageTableBase.PageSize);
+ 
++            if (ncePatcher != null && info.PatchReserveSize > 0)
++            {
++                uint imageSize = BitUtils.AlignUp<uint>(
++                    (uint)relocatableObject.Text.Length + (uint)relocatableObject.Ro.Length +
++                    (uint)relocatableObject.Data.Length + relocatableObject.BssSize,
++                    (uint)KPageTableBase.PageSize);
++
++                byte[] moduleImage = new byte[imageSize];
++                int copyLen = Math.Min(relocatableObject.Program.Length, moduleImage.Length);
++                Buffer.BlockCopy(relocatableObject.Program, 0, moduleImage, 0, copyLen);
++
++                // Identity-mapped address space: the guest VA is the host pointer, so the
++                // trampoline keys/targets the patcher emits are directly executable.
++                if (!ncePatcher.TryPatchModule(
++                        moduleImage,
++                        relocatableObject.TextOffset,
++                        (ulong)relocatableObject.Text.Length,
++                        baseAddress,
++                        out byte[] patched,
++                        out NceModulePatchLayout layout))
++                {
++                    return KernelResult.InvalidState;
++                }
++
++                process.CpuMemory.Write(baseAddress, patched);
++
++                Result result = process.MemoryManager.SetProcessMemoryPermission(
++                    textStart, roStart - textStart, KMemoryPermission.ReadAndExecute);
++                if (result != Result.Success)
++                {
++                    return result;
++                }
++
++                // Trampoline pages: RX but CodeMutable so nnrtld won't MOD0-scan them.
++                if (layout.PatchSize != 0)
++                {
++                    result = process.MemoryManager.SetProcessMemoryPermission(
++                        baseAddress + layout.PatchOffset,
++                        layout.PatchSize,
++                        KMemoryPermission.Read | KMemoryPermission.Write | KMemoryPermission.Execute);
++                    if (result != Result.Success)
++                    {
++                        return result;
++                    }
++
++                    result = process.MemoryManager.SetProcessMemoryPermission(
++                        baseAddress + layout.PatchOffset,
++                        layout.PatchSize,
++                        KMemoryPermission.ReadAndExecute);
++                    if (result != Result.Success)
++                    {
++                        return result;
++                    }
++                }
++
++                result = process.MemoryManager.SetProcessMemoryPermission(roStart, dataStart - roStart, KMemoryPermission.Read);
++                if (result != Result.Success)
++                {
++                    return result;
++                }
++
++                return process.MemoryManager.SetProcessMemoryPermission(dataStart, bssEnd - dataStart, KMemoryPermission.ReadAndWrite);
++            }
++
+             process.CpuMemory.Write(textStart, relocatableObject.Text);
+             process.CpuMemory.Write(roStart, relocatableObject.Ro);
+             process.CpuMemory.Write(dataStart, relocatableObject.Data);
+ 
+             MemoryHelper.FillWithZeros(process.CpuMemory, bssStart, (int)(bssEnd - bssStart));
+ 
+-            Result result;
++            Result resultUnpatched;
+ 
+-            result = process.MemoryManager.SetProcessMemoryPermission(textStart, roStart - textStart, KMemoryPermission.ReadAndExecute);
++            resultUnpatched = process.MemoryManager.SetProcessMemoryPermission(textStart, roStart - textStart, KMemoryPermission.ReadAndExecute);
+ 
+-            if (result != Result.Success)
++            if (resultUnpatched != Result.Success)
+             {
+-                return result;
++                return resultUnpatched;
+             }
+ 
+-            result = process.MemoryManager.SetProcessMemoryPermission(roStart, dataStart - roStart, KMemoryPermission.Read);
++            resultUnpatched = process.MemoryManager.SetProcessMemoryPermission(roStart, dataStart - roStart, KMemoryPermission.Read);
+ 
+-            if (result != Result.Success)
++            if (resultUnpatched != Result.Success)
+             {
+-                return result;
++                return resultUnpatched;
+             }
+ 
+             return process.MemoryManager.SetProcessMemoryPermission(dataStart, bssEnd - dataStart, KMemoryPermission.ReadAndWrite);
+@@ -452,7 +557,11 @@ namespace Ryujinx.HLE.HOS.Services.Ro
+ 
+                     if (result == ResultCode.Success)
+                     {
+-                        result = (ResultCode)SetNroMemoryPermissions(_owner, info.Executable, nroMappedAddress).ErrorCode;
++                        result = (ResultCode)SetNroMemoryPermissions(
++                            _owner,
++                            info,
++                            nroMappedAddress,
++                            context.Device.Configuration.NceModulePatcher).ErrorCode;
+ 
+                         if (result == ResultCode.Success)
+                         {
+diff --git a/src/Ryujinx.HLE/HOS/Services/Ro/Types/NroInfo.cs b/src/Ryujinx.HLE/HOS/Services/Ro/Types/NroInfo.cs
+index 4df2793f1..4d9335e75 100644
+--- a/src/Ryujinx.HLE/HOS/Services/Ro/Types/NroInfo.cs
++++ b/src/Ryujinx.HLE/HOS/Services/Ro/Types/NroInfo.cs
+@@ -14,6 +14,11 @@ namespace Ryujinx.HLE.HOS.Services.Ro
+         public ulong TotalSize { get; private set; }
+         public ulong NroMappedAddress { get; set; }
+ 
++        /// <summary>
++        /// Extra bytes reserved after BSS for an NCE PostData patch section (0 when NCE is off).
++        /// </summary>
++        public ulong PatchReserveSize { get; private set; }
++
+         public NroInfo(
+             NroExecutable executable,
+             byte[] hash,
+@@ -21,7 +26,8 @@ namespace Ryujinx.HLE.HOS.Services.Ro
+             ulong nroSize,
+             ulong bssAddress,
+             ulong bssSize,
+-            ulong totalSize)
++            ulong totalSize,
++            ulong patchReserveSize = 0)
+         {
+             Executable = executable;
+             Hash = hash;
+@@ -30,6 +36,7 @@ namespace Ryujinx.HLE.HOS.Services.Ro
+             BssAddress = bssAddress;
+             BssSize = bssSize;
+             TotalSize = totalSize;
++            PatchReserveSize = patchReserveSize;
+         }
+     }
+ }
+diff --git a/src/Ryujinx.HLE/HleConfiguration.cs b/src/Ryujinx.HLE/HleConfiguration.cs
+index e2f95ede7..768bc3df9 100644
+--- a/src/Ryujinx.HLE/HleConfiguration.cs
++++ b/src/Ryujinx.HLE/HleConfiguration.cs
+@@ -2,12 +2,14 @@ using LibHac.Tools.FsSystem;
+ using Ryujinx.Audio.Integration;
+ using Ryujinx.Common.Configuration;
+ using Ryujinx.Common.Configuration.Multiplayer;
++using Ryujinx.Cpu;
+ using Ryujinx.Graphics.GAL;
+ using Ryujinx.HLE.FileSystem;
+ using Ryujinx.HLE.HOS;
+ using Ryujinx.HLE.HOS.Services.Account.Acc;
+ using Ryujinx.HLE.HOS.SystemState;
+ using Ryujinx.HLE.UI;
++using Ryujinx.Memory;
+ using System;
+ 
+ namespace Ryujinx.HLE
+@@ -164,6 +166,32 @@ namespace Ryujinx.HLE
+         /// </summary>
+         internal readonly bool UseHypervisor;
+ 
++        /// <summary>
++        /// Prefer the Native Code Execution (NCE) CPU backend when the host is
++        /// ARM64 and memory is host-mapped. Default false until homebrew E2E is proven.
++        /// </summary>
++        public bool UseNce { internal get; set; }
++
++        /// <summary>
++        /// Optional factory that creates the NCE <see cref="Ryujinx.Cpu.ICpuEngine"/>.
++        /// Set by the Android host (LibRyubing) when <see cref="UseNce"/> is enabled
++        /// so HLE does not take a project reference on LibRyubing.
++        /// </summary>
++        public Func<ITickSource, ICpuEngine> CpuEngineFactory { internal get; set; }
++
++        /// <summary>
++        /// Optional NCE module patcher for load-time binary rewriting.
++        /// </summary>
++        public INceModulePatcher NceModulePatcher { internal get; set; }
++
++        /// <summary>
++        /// Pre-reserved, identity-mapped host window for the NCE application process
++        /// (guest VA == host pointer). Reserved by the host before the process is created
++        /// so the loader can place code inside it; consumed by <c>ArmProcessContextFactory</c>.
++        /// Null when NCE is disabled or no window could be reserved.
++        /// </summary>
++        public MemoryBlock NceAddressSpaceWindow { internal get; set; }
++
+         /// <summary>
+         /// Multiplayer LAN Interface ID (device GUID)
+         /// </summary>
+diff --git a/src/Ryujinx.HLE/INceModulePatcher.cs b/src/Ryujinx.HLE/INceModulePatcher.cs
+new file mode 100644
+index 000000000..5c15f0ba3
+--- /dev/null
++++ b/src/Ryujinx.HLE/INceModulePatcher.cs
+@@ -0,0 +1,52 @@
++using System;
++
++namespace Ryujinx.HLE
++{
++    /// <summary>
++    /// Layout of an NCE-patched module image within the guest address space
++    /// (offsets relative to the module base).
++    /// </summary>
++    public readonly struct NceModulePatchLayout
++    {
++        public ulong PatchedImageSize { get; init; }
++        public ulong PatchOffset { get; init; }
++        public ulong PatchSize { get; init; }
++        public ulong PrePatchOffset { get; init; }
++        public ulong PrePatchSize { get; init; }
++
++        /// <summary>0=none 1=pre-text 2=post-data 3=split</summary>
++        public uint PatchMode { get; init; }
++    }
++
++    /// <summary>
++    /// Host-supplied NCE module patcher. Implemented in LibRyubing (P/Invoke to
++    /// libryubing-nce.so) and injected via <see cref="HleConfiguration"/> so
++    /// Ryujinx.HLE does not reference LibRyubing.
++    /// </summary>
++    public interface INceModulePatcher
++    {
++        /// <summary>
++        /// Clears the native post-SVC trampoline registry. Call once before
++        /// loading a new guest process under NCE.
++        /// </summary>
++        void ClearTrampolines();
++
++        /// <summary>
++        /// Page-aligned growth (bytes) to reserve beyond the unpatched module
++        /// image so the patched image fits in the process code region.
++        /// </summary>
++        ulong EstimatePatchGrowth(ulong imageSize, ulong codeOffset, ulong codeSize);
++
++        /// <summary>
++        /// Patches a contiguous module image (text/ro/data[/bss] layout).
++        /// On success returns the expanded patched buffer and section layout.
++        /// </summary>
++        bool TryPatchModule(
++            ReadOnlySpan<byte> image,
++            ulong codeOffset,
++            ulong codeSize,
++            ulong baseVirtualAddress,
++            out byte[] patchedImage,
++            out NceModulePatchLayout layout);
++    }
++}
+diff --git a/src/Ryujinx.HLE/Loaders/Processes/ProcessLoaderHelper.cs b/src/Ryujinx.HLE/Loaders/Processes/ProcessLoaderHelper.cs
+index a2b7d0ddf..045381fda 100644
+--- a/src/Ryujinx.HLE/Loaders/Processes/ProcessLoaderHelper.cs
++++ b/src/Ryujinx.HLE/Loaders/Processes/ProcessLoaderHelper.cs
+@@ -253,6 +253,31 @@ namespace Ryujinx.HLE.Loaders.Processes
+             ulong codeStart = ((meta.Flags & 1) != 0 ? 0x8000000UL : 0x200000UL) + CodeStartOffset;
+             uint codeSize = 0;
+ 
++            ProcessCreationFlags processFlags = (ProcessCreationFlags)meta.Flags | ProcessCreationFlags.IsApplication;
++
++            // NCE needs an identity-mapped (guest VA == host pointer) 39-bit address space.
++            // The host reserved that window up front; offset the code placement by its base so
++            // the kernel lays the whole process out inside it (Eden's aslr_space_start).
++            bool nceIdentity = device.Configuration.UseNce
++                && device.Configuration.NceModulePatcher != null
++                && device.Configuration.NceAddressSpaceWindow != null
++                && (processFlags & ProcessCreationFlags.AddressSpaceMask) == ProcessCreationFlags.AddressSpace64Bit
++                && processFlags.HasFlag(ProcessCreationFlags.Is64Bit);
++
++            if (nceIdentity)
++            {
++                ulong windowBase = (ulong)device.Configuration.NceAddressSpaceWindow.Pointer;
++                codeStart += windowBase;
++
++                Logger.Info?.Print(LogClass.Loader,
++                    $"NCE|CODE window=0x{windowBase:X} codeStart=0x{codeStart:X}");
++            }
++            else if (device.Configuration.UseNce && device.Configuration.NceAddressSpaceWindow == null)
++            {
++                Logger.Warning?.Print(LogClass.Loader,
++                    "NCE requested but no identity address space window is reserved; loading for JIT");
++            }
++
+             string[] buildIds = new string[executables.Length];
+ 
+             for (int i = 0; i < executables.Length; i++)
+@@ -267,6 +292,14 @@ namespace Ryujinx.HLE.Loaders.Processes
+ 
+             ulong[] nsoBase = new ulong[executables.Length];
+ 
++            bool useNce = nceIdentity;
++
++            if (useNce)
++            {
++                device.Configuration.NceModulePatcher.ClearTrampolines();
++                Logger.Info?.Print(LogClass.Loader, "NCE load-time patching enabled for this process");
++            }
++
+             for (int index = 0; index < executables.Length; index++)
+             {
+                 IExecutable nso = executables[index];
+@@ -289,6 +322,13 @@ namespace Ryujinx.HLE.Loaders.Processes
+ 
+                 nsoSize = BitUtils.AlignUp<uint>(nsoSize, KPageTableBase.PageSize);
+ 
++                if (useNce)
++                {
++                    ulong growth = device.Configuration.NceModulePatcher.EstimatePatchGrowth(
++                        nsoSize, nso.TextOffset, (ulong)nso.Text.Length);
++                    nsoSize += (uint)BitUtils.AlignUp<ulong>(growth, KPageTableBase.PageSize);
++                }
++
+                 nsoBase[index] = codeStart + codeSize;
+ 
+                 codeSize += nsoSize;
+@@ -312,7 +352,7 @@ namespace Ryujinx.HLE.Loaders.Processes
+                 programId,
+                 codeStart,
+                 codePagesCount,
+-                (ProcessCreationFlags)meta.Flags | ProcessCreationFlags.IsApplication,
++                processFlags,
+                 0,
+                 personalMmHeapPagesCount);
+ 
+@@ -406,7 +446,7 @@ namespace Ryujinx.HLE.Loaders.Processes
+             {
+                 Logger.Info?.Print(LogClass.Loader, $"Loading image {index} at 0x{nsoBase[index]:x16}...");
+ 
+-                result = LoadIntoMemory(process, executables[index], nsoBase[index]);
++                result = LoadIntoMemory(process, executables[index], nsoBase[index], useNce ? device.Configuration.NceModulePatcher : null);
+                 if (result != Result.Success)
+                 {
+                     Logger.Error?.Print(LogClass.Loader, $"Process initialization returned error \"{result}\".");
+@@ -466,6 +506,11 @@ namespace Ryujinx.HLE.Loaders.Processes
+         }
+ 
+         public static Result LoadIntoMemory(KProcess process, IExecutable image, ulong baseAddress)
++        {
++            return LoadIntoMemory(process, image, baseAddress, ncePatcher: null);
++        }
++
++        public static Result LoadIntoMemory(KProcess process, IExecutable image, ulong baseAddress, INceModulePatcher ncePatcher)
+         {
+             ulong textStart = baseAddress + image.TextOffset;
+             ulong roStart = baseAddress + image.RoOffset;
+@@ -479,12 +524,6 @@ namespace Ryujinx.HLE.Loaders.Processes
+                 end = bssStart + image.BssSize;
+             }
+ 
+-            process.CpuMemory.Write(textStart, image.Text);
+-            process.CpuMemory.Write(roStart, image.Ro);
+-            process.CpuMemory.Write(dataStart, image.Data);
+-
+-            process.CpuMemory.Fill(bssStart, image.BssSize, 0);
+-
+             Result SetProcessMemoryPermission(ulong address, ulong size, KMemoryPermission permission)
+             {
+                 if (size == 0)
+@@ -497,16 +536,118 @@ namespace Ryujinx.HLE.Loaders.Processes
+                 return process.MemoryManager.SetProcessMemoryPermission(address, size, permission);
+             }
+ 
+-            Result result = SetProcessMemoryPermission(textStart, (ulong)image.Text.Length, KMemoryPermission.ReadAndExecute);
+-            if (result != Result.Success)
++            if (ncePatcher != null)
++            {
++                uint imageSize = BitUtils.AlignUp<uint>(
++                    (uint)Math.Max(Math.Max(
++                        image.TextOffset + (uint)image.Text.Length,
++                        image.RoOffset + (uint)image.Ro.Length),
++                        image.DataOffset + (uint)image.Data.Length + image.BssSize),
++                    KPageTableBase.PageSize);
++
++                byte[] moduleImage = new byte[imageSize];
++                int copyLen = Math.Min(image.Program.Length, moduleImage.Length);
++                Buffer.BlockCopy(image.Program, 0, moduleImage, 0, copyLen);
++
++                // Identity-mapped address space: the guest VA is the host pointer, so the
++                // trampoline keys/targets the patcher emits are directly executable.
++                if (!ncePatcher.TryPatchModule(
++                        moduleImage,
++                        image.TextOffset,
++                        (ulong)image.Text.Length,
++                        baseAddress,
++                        out byte[] patched,
++                        out NceModulePatchLayout layout))
++                {
++                    Logger.Error?.Print(LogClass.Loader,
++                        $"NCE patch failed for module at 0x{baseAddress:X16}; refusing to load unpatched code under NCE");
++                    return KernelResult.InvalidState;
++                }
++
++                process.CpuMemory.Write(baseAddress, patched);
++
++                // One RX block for [textStart, roStart). Matches the NRO path and
++                // prevents nnrtld's QueryMemory scan from seeing mid-module RX
++                // CodeStatic fragments (it treats each as a candidate MOD0 module).
++                Result result = SetProcessMemoryPermission(
++                    textStart,
++                    roStart - textStart,
++                    KMemoryPermission.ReadAndExecute);
++                if (result != Result.Success)
++                {
++                    return result;
++                }
++
++                // NCE trampoline pages must be executable but must NOT stay CodeStatic:
++                // nnrtld scans every R-X CodeStatic region for MOD0 and will chase
++                // garbage offsets in patch instructions into unmapped space.
++                // RWX first flips CodeStatic → CodeMutable; then drop Write.
++                Result SetPatchExecutable(ulong address, ulong size)
++                {
++                    if (size == 0)
++                    {
++                        return Result.Success;
++                    }
++
++                    Result r = SetProcessMemoryPermission(
++                        address,
++                        size,
++                        KMemoryPermission.Read | KMemoryPermission.Write | KMemoryPermission.Execute);
++                    if (r != Result.Success)
++                    {
++                        return r;
++                    }
++
++                    return SetProcessMemoryPermission(address, size, KMemoryPermission.ReadAndExecute);
++                }
++
++                if (layout.PrePatchSize != 0)
++                {
++                    result = SetPatchExecutable(
++                        baseAddress + layout.PrePatchOffset,
++                        layout.PrePatchSize);
++                    if (result != Result.Success)
++                    {
++                        return result;
++                    }
++                }
++
++                if (layout.PatchSize != 0)
++                {
++                    result = SetPatchExecutable(
++                        baseAddress + layout.PatchOffset,
++                        layout.PatchSize);
++                    if (result != Result.Success)
++                    {
++                        return result;
++                    }
++                }
++
++                result = SetProcessMemoryPermission(roStart, (ulong)image.Ro.Length, KMemoryPermission.Read);
++                if (result != Result.Success)
++                {
++                    return result;
++                }
++
++                return SetProcessMemoryPermission(dataStart, end - dataStart, KMemoryPermission.ReadAndWrite);
++            }
++
++            process.CpuMemory.Write(textStart, image.Text);
++            process.CpuMemory.Write(roStart, image.Ro);
++            process.CpuMemory.Write(dataStart, image.Data);
++
++            process.CpuMemory.Fill(bssStart, image.BssSize, 0);
++
++            Result resultUnpatched = SetProcessMemoryPermission(textStart, (ulong)image.Text.Length, KMemoryPermission.ReadAndExecute);
++            if (resultUnpatched != Result.Success)
+             {
+-                return result;
++                return resultUnpatched;
+             }
+ 
+-            result = SetProcessMemoryPermission(roStart, (ulong)image.Ro.Length, KMemoryPermission.Read);
+-            if (result != Result.Success)
++            resultUnpatched = SetProcessMemoryPermission(roStart, (ulong)image.Ro.Length, KMemoryPermission.Read);
++            if (resultUnpatched != Result.Success)
+             {
+-                return result;
++                return resultUnpatched;
+             }
+ 
+             return SetProcessMemoryPermission(dataStart, end - dataStart, KMemoryPermission.ReadAndWrite);
+-- 
+2.45.0
+

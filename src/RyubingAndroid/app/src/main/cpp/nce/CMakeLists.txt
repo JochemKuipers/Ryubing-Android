@@ -64,6 +64,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
         patcher.cpp
         signal_handlers.cpp
         interpreter_visitor.cpp
+        self_test.cpp
         nce.S
     )
 

@@ -63,7 +63,11 @@ int Fail(const char* msg) {
 
 } // namespace
 
-int main() {
+// Patches a fixture module loaded at `load_base` and checks the rewrite plus
+// the trampoline registry. Run for several bases: NCE places modules inside an
+// identity-mapped window whose base is >= 2^36 (see IdentityWindowPlacement),
+// so every address the patcher emits must be correct for high absolute bases.
+int RunPatchCase(uint64_t load_base) {
     // Build a tiny 4KiB "module" with code at offset 0.
     // Layout mirrors a minimal NSO .text: skip first 0x24 bytes (NSO header
     // region the patcher ignores), then place fixtures.
@@ -107,7 +111,7 @@ int main() {
 
     CodeSegment code{};
     code.offset = TextOff;
-    code.addr = 0x7100000000ull; // Typical Switch main NSO VA
+    code.addr = load_base;
     code.size = static_cast<uint32_t>(ImageSize);
 
     // Count patchable instructions before rewriting.
@@ -183,9 +187,60 @@ int main() {
         return Fail("no entry trampolines registered");
     }
 
-    std::printf("ok: mode=%u image %zu -> %zu, trampolines=%zu, "
+    // Trampoline keys are absolute guest addresses (== host pointers under the
+    // identity-mapped AS) of the instruction after each SVC; targets must land
+    // inside the patched image at the same base. Both must survive a high base.
+    const uint64_t expected_key = load_base + FixtureBase + 4;
+    bool found_key = false;
+    for (const auto& [guest_addr, patch_addr] : trampolines) {
+        if (guest_addr == expected_key) {
+            found_key = true;
+        }
+        if (guest_addr < load_base || guest_addr >= load_base + image.size()) {
+            std::fprintf(stderr, "FAIL: trampoline key 0x%llx outside module [0x%llx, 0x%llx)\n",
+                         (unsigned long long)guest_addr, (unsigned long long)load_base,
+                         (unsigned long long)(load_base + image.size()));
+            return 1;
+        }
+        if (patch_addr < load_base || patch_addr >= load_base + image.size()) {
+            std::fprintf(stderr, "FAIL: trampoline target 0x%llx outside module [0x%llx, 0x%llx)\n",
+                         (unsigned long long)patch_addr, (unsigned long long)load_base,
+                         (unsigned long long)(load_base + image.size()));
+            return 1;
+        }
+        if ((patch_addr & 3) != 0) {
+            return Fail("trampoline target not 4-byte aligned");
+        }
+    }
+    if (!found_key) {
+        std::fprintf(stderr, "FAIL: no trampoline keyed at post-SVC address 0x%llx\n",
+                     (unsigned long long)expected_key);
+        return 1;
+    }
+
+    std::printf("ok: base=0x%llx mode=%u image %zu -> %zu, trampolines=%zu, "
                 "pre_svc=%u pre_mrs=%u pre_excl=%u\n",
+                (unsigned long long)load_base,
                 static_cast<unsigned>(patcher.GetPatchMode()), ImageSize, image.size(),
                 trampolines.size(), svc_before, mrs_before, excl_before);
+    return 0;
+}
+
+int main() {
+    // Classic Switch main NSO VA (39-bit layout without an identity window).
+    if (int rc = RunPatchCase(0x7100000000ull); rc != 0) {
+        return rc;
+    }
+    // Identity-mapped window bases: code = window + 0x8000000 with window in
+    // [2^36, 2^39 - 2^38). Lowest, a mid value, and the highest possible.
+    if (int rc = RunPatchCase(0x1000000000ull + 0x8000000ull); rc != 0) {
+        return rc;
+    }
+    if (int rc = RunPatchCase(0x3FA0000000ull + 0x8000000ull); rc != 0) {
+        return rc;
+    }
+    if (int rc = RunPatchCase(0x7FFFE00000ull - 0x4000000000ull + 0x8000000ull); rc != 0) {
+        return rc;
+    }
     return 0;
 }

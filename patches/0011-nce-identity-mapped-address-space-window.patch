@@ -1,0 +1,556 @@
+From 0000000000000000000000000000000000000011 Mon Sep 17 00:00:00 2001
+From: Ryubing Android <ryubing-android@local>
+Date: Fri, 4 Sep 2026 21:00:00 +0200
+Subject: [PATCH 11/13] nce: identity-mapped address space window (guest VA == host pointer)
+
+NCE executes guest code natively, so every guest pointer must be directly
+dereferenceable by the host. Eden solves this by reserving one large window at
+a random high address and enabling direct-mapped addressing (guest VA == host
+pointer). Port that model:
+
+- Ryujinx.Memory: MAP_FIXED_NOREPLACE reserve-at-address (MemoryManagementUnix
+  .ReserveAt, MemoryBlock.TryReserveAt), returned address verified.
+- Ryujinx.Cpu: IdentityWindowPlacement (pure hint math: 2 MiB aligned base in
+  [2^36, 2^39 - size)) and AddressSpace.TryCreateIdentityWindow (2^38 preferred,
+  2^37 minimum, 64 attempts per size), mirroring HostMemory::ChooseVirtualBase.
+- MemoryManagerHostNoMirror: identityMapped mode. Guest VAs are
+  [WindowBase, WindowBase + WindowSize); page flags, page table and tracking are
+  keyed by guest VA, only the MemoryBlock is addressed by window offset. No
+  MemoryEhMeilleure is installed in this mode (the NCE SIGSEGV handler owns guest
+  faults). Replaces the previous boost/peel dual-space heuristics entirely.
+- VirtualMemoryManagerBase: ValidateAddress/ValidateAddressAndSize virtual.
+- HostMapped/HostNoMirror Reprotect: real mprotect so SetProcessMemoryPermission
+  (RX) makes guest .text executable (NCE instruction-fetches from it).
+
+diff --git a/src/Ryujinx.Cpu/AddressSpace.cs b/src/Ryujinx.Cpu/AddressSpace.cs
+index 59e55e130..54a8d4c7e 100644
+--- a/src/Ryujinx.Cpu/AddressSpace.cs
++++ b/src/Ryujinx.Cpu/AddressSpace.cs
+@@ -69,6 +69,49 @@ namespace Ryujinx.Cpu
+             return addressSpace != null;
+         }
+ 
++        /// <summary>
++        /// Reserves a single, identity-mapped guest address space window for NCE.
++        /// </summary>
++        /// <remarks>
++        /// Mirrors Eden's <c>HostMemory::ChooseVirtualBase</c>: the window is placed at a random
++        /// 2 MiB aligned host address inside <c>[2^36, 2^39 - size)</c> so that every guest VA
++        /// is a valid 39-bit host pointer, the whole window lies above 36 bits (required by
++        /// Qualcomm GPU drivers), and no address translation is needed between guest and host.
++        /// Tries <paramref name="preferredSize"/> first (Eden uses 2^38), then halves until
++        /// <paramref name="minimumSize"/>.
++        /// </remarks>
++        /// <param name="preferredSize">Preferred window size (power of two)</param>
++        /// <param name="minimumSize">Smallest acceptable window size (power of two)</param>
++        /// <param name="addressSpace">Reserved window on success</param>
++        /// <param name="attemptsPerSize">Random placements to try per size</param>
++        /// <returns>True if a window was reserved</returns>
++        public static bool TryCreateIdentityWindow(ulong preferredSize, ulong minimumSize, out MemoryBlock addressSpace, int attemptsPerSize = 64)
++        {
++            addressSpace = null;
++
++            Random rng = new();
++
++            for (ulong size = preferredSize; size >= minimumSize && size != 0; size >>= 1)
++            {
++                for (int attempt = 0; attempt < attemptsPerSize; attempt++)
++                {
++                    ulong hint = IdentityWindowPlacement.PickHint(size, rng.NextInt64());
++
++                    if (hint == 0)
++                    {
++                        break;
++                    }
++
++                    if (MemoryBlock.TryReserveAt(size, (nint)hint, out addressSpace))
++                    {
++                        return true;
++                    }
++                }
++            }
++
++            return false;
++        }
++
+         public void Map(ulong va, ulong pa, ulong size, MemoryMapFlags flags)
+         {
+             Base.MapView(_backingMemory, pa, va, size);
+diff --git a/src/Ryujinx.Cpu/IdentityWindowPlacement.cs b/src/Ryujinx.Cpu/IdentityWindowPlacement.cs
+new file mode 100644
+index 000000000..428479d43
+--- /dev/null
++++ b/src/Ryujinx.Cpu/IdentityWindowPlacement.cs
+@@ -0,0 +1,72 @@
++using System;
++
++namespace Ryujinx.Cpu
++{
++    /// <summary>
++    /// Pure placement math for the NCE identity-mapped address space window.
++    /// Kept free of OS calls so it can be unit tested on any host.
++    /// </summary>
++    public static class IdentityWindowPlacement
++    {
++        /// <summary>Host user VA limit assumed for NCE (39-bit, 4 KiB pages on Android arm64).</summary>
++        public const ulong HostVaLimit = 1UL << 39;
++
++        /// <summary>Lower bound for the window: Qualcomm GPU drivers need guest memory above 36 bits.</summary>
++        public const ulong MinimumBase = 1UL << 36;
++
++        /// <summary>Window alignment (L2 block / transparent huge page size).</summary>
++        public const ulong Alignment = 0x200000;
++
++        /// <summary>Eden's default reservation size.</summary>
++        public const ulong PreferredSize = 1UL << 38;
++
++        /// <summary>Smallest window that still fits a (shrunken) 39-bit region layout.</summary>
++        public const ulong MinimumSize = 1UL << 37;
++
++        /// <summary>
++        /// Picks a candidate base address for a window of <paramref name="size"/> bytes using
++        /// <paramref name="randomValue"/> as the entropy source.
++        /// </summary>
++        /// <returns>An aligned base in <c>[MinimumBase, HostVaLimit - size]</c>, or 0 if the size cannot fit.</returns>
++        public static ulong PickHint(ulong size, long randomValue)
++        {
++            if (size == 0 || size > HostVaLimit - MinimumBase)
++            {
++                return 0;
++            }
++
++            ulong lower = MinimumBase / Alignment;
++            ulong upper = (HostVaLimit - size) / Alignment;
++
++            if (upper < lower)
++            {
++                return 0;
++            }
++
++            ulong range = upper - lower + 1;
++            ulong slot = ((ulong)randomValue % range) + lower;
++
++            return slot * Alignment;
++        }
++
++        /// <summary>
++        /// Returns true if <c>[base, base + size)</c> is a valid identity window.
++        /// </summary>
++        public static bool IsValidWindow(ulong baseAddress, ulong size)
++        {
++            if (size == 0 || (baseAddress % Alignment) != 0)
++            {
++                return false;
++            }
++
++            if (baseAddress < MinimumBase)
++            {
++                return false;
++            }
++
++            ulong end = baseAddress + size;
++
++            return end > baseAddress && end <= HostVaLimit;
++        }
++    }
++}
+diff --git a/src/Ryujinx.Cpu/Jit/MemoryManagerHostMapped.cs b/src/Ryujinx.Cpu/Jit/MemoryManagerHostMapped.cs
+index e2d8f5efb..3b586fe59 100644
+--- a/src/Ryujinx.Cpu/Jit/MemoryManagerHostMapped.cs
++++ b/src/Ryujinx.Cpu/Jit/MemoryManagerHostMapped.cs
+@@ -409,7 +409,10 @@ namespace Ryujinx.Cpu.Jit
+         /// <inheritdoc/>
+         public void Reprotect(ulong va, ulong size, MemoryPermission protection)
+         {
+-            // TODO
++            // Required for NCE: MapView creates RW pages; SetProcessMemoryPermission
++            // must mprotect guest .text to RX or instruction fetch SIGSEGVs.
++            AssertValidAddressAndSize(va, size);
++            _addressSpace.Base.Reprotect(va, size, protection, false);
+         }
+ 
+         /// <inheritdoc/>
+diff --git a/src/Ryujinx.Cpu/Jit/MemoryManagerHostNoMirror.cs b/src/Ryujinx.Cpu/Jit/MemoryManagerHostNoMirror.cs
+index 0318b862e..9ef249258 100644
+--- a/src/Ryujinx.Cpu/Jit/MemoryManagerHostNoMirror.cs
++++ b/src/Ryujinx.Cpu/Jit/MemoryManagerHostNoMirror.cs
+@@ -11,8 +11,23 @@ namespace Ryujinx.Cpu.Jit
+ {
+     /// <summary>
+     /// Host-mapped memory manager for a single reserved region (no mirror pair).
+-    /// Used on bionic when mirrored address-space reservation fails.
++    /// Used on bionic when mirrored address-space reservation fails, and as the
++    /// identity-mapped address space for NCE.
+     /// </summary>
++    /// <remarks>
++    /// Two addressing modes:
++    /// <list type="bullet">
++    /// <item><b>Offset mode</b> (<c>identityMapped == false</c>): guest VAs are
++    /// <c>[0, window size)</c> and host pointer = <c>window base + VA</c> (classic JIT host-mapped).</item>
++    /// <item><b>Identity mode</b> (<c>identityMapped == true</c>, NCE): guest VAs are
++    /// <c>[window base, window base + window size)</c> and host pointer == VA. This is
++    /// Eden's <c>HostMemory::EnableDirectMappedAddress</c>: the kernel lays the process
++    /// address space out inside the window, so native guest code can dereference every
++    /// pointer directly and no guest/host translation exists anywhere.</item>
++    /// </list>
++    /// Page flags, the page table and memory tracking are always indexed by guest VA;
++    /// only the underlying <see cref="MemoryBlock"/> is addressed by window offset.
++    /// </remarks>
+     public sealed class MemoryManagerHostNoMirror : VirtualMemoryManagerRefCountedBase, IMemoryManager, IVirtualMemoryManagerTracked
+     {
+         private readonly InvalidAccessHandler _invalidAccessHandler;
+@@ -22,9 +37,28 @@ namespace Ryujinx.Cpu.Jit
+         private readonly MemoryBlock _backingMemory;
+         private readonly PageTable<ulong> _pageTable;
+ 
++        /// <summary>Guest VA of the first byte of the window (0 in offset mode).</summary>
++        private readonly ulong _windowBase;
++
+         public int AddressSpaceBits { get; }
++
++        /// <summary>
++        /// Exclusive upper bound of the guest VA range: <c>WindowBase + WindowSize</c>.
++        /// </summary>
+         protected override ulong AddressSpaceSize { get; }
+ 
++        /// <summary>True when guest VA == host pointer (NCE).</summary>
++        public bool IsIdentityMapped => _windowBase != 0;
++
++        /// <summary>First guest VA backed by the reserved window.</summary>
++        public ulong WindowBase => _windowBase;
++
++        /// <summary>Size in bytes of the reserved window.</summary>
++        public ulong WindowSize => _addressSpace.Size;
++
++        /// <summary>Exclusive end guest VA of the reserved window.</summary>
++        public ulong WindowEnd => _windowBase + _addressSpace.Size;
++
+         private readonly MemoryEhMeilleure _memoryEh;
+ 
+         private readonly ManagedPageFlags _pages;
+@@ -32,7 +66,10 @@ namespace Ryujinx.Cpu.Jit
+         /// <inheritdoc/>
+         public bool UsesPrivateAllocations => false;
+ 
+-        public nint PageTablePointer => _addressSpace.Pointer;
++        /// <summary>
++        /// Host address of guest VA 0 (host pointer = PageTablePointer + VA). Zero in identity mode.
++        /// </summary>
++        public nint PageTablePointer => (nint)((ulong)_addressSpace.Pointer - _windowBase);
+ 
+         public MemoryManagerType Type => _unsafeMode ? MemoryManagerType.HostMappedUnsafe : MemoryManagerType.HostMapped;
+ 
+@@ -40,23 +77,33 @@ namespace Ryujinx.Cpu.Jit
+ 
+         public event Action<ulong, ulong> UnmapEvent;
+ 
++        /// <param name="addressSpace">Reserved, view-compatible host window</param>
++        /// <param name="backingMemory">Guest DRAM backing block</param>
++        /// <param name="unsafeMode">Skip access checks on fast paths</param>
++        /// <param name="invalidAccessHandler">Invalid access callback</param>
++        /// <param name="identityMapped">
++        /// Use guest VA == host pointer addressing. Guest faults are then owned by the
++        /// NCE signal handler, so the JIT <see cref="MemoryEhMeilleure"/> handler is not installed.
++        /// </param>
+         public MemoryManagerHostNoMirror(
+             MemoryBlock addressSpace,
+             MemoryBlock backingMemory,
+             bool unsafeMode,
+-            InvalidAccessHandler invalidAccessHandler)
++            InvalidAccessHandler invalidAccessHandler,
++            bool identityMapped = false)
+         {
+             _addressSpace = addressSpace;
+             _backingMemory = backingMemory;
+             _pageTable = new PageTable<ulong>();
+             _invalidAccessHandler = invalidAccessHandler;
+             _unsafeMode = unsafeMode;
+-            AddressSpaceSize = addressSpace.Size;
++            _windowBase = identityMapped ? (ulong)addressSpace.Pointer : 0;
++            AddressSpaceSize = _windowBase + addressSpace.Size;
+ 
+             ulong asSize = PageSize;
+             int asBits = PageBits;
+ 
+-            while (asSize < addressSpace.Size)
++            while (asSize < AddressSpaceSize)
+             {
+                 asSize <<= 1;
+                 asBits++;
+@@ -67,7 +114,31 @@ namespace Ryujinx.Cpu.Jit
+             _pages = new ManagedPageFlags(asBits);
+ 
+             Tracking = new MemoryTracking(this, (int)MemoryBlock.GetPageSize(), invalidAccessHandler);
+-            _memoryEh = new MemoryEhMeilleure(addressSpace, null, Tracking);
++
++            if (!identityMapped)
++            {
++                _memoryEh = new MemoryEhMeilleure(addressSpace, null, Tracking);
++            }
++        }
++
++        /// <summary>
++        /// Converts a guest VA into an offset inside the reserved <see cref="MemoryBlock"/>.
++        /// </summary>
++        [MethodImpl(MethodImplOptions.AggressiveInlining)]
++        private ulong ToOffset(ulong va)
++        {
++            return va - _windowBase;
++        }
++
++        protected override bool ValidateAddress(ulong va)
++        {
++            return va >= _windowBase && va < AddressSpaceSize;
++        }
++
++        protected override bool ValidateAddressAndSize(ulong va, ulong size)
++        {
++            ulong endVa = va + size;
++            return va >= _windowBase && endVa >= va && endVa >= size && endVa <= AddressSpaceSize;
+         }
+ 
+         private void AssertMapped(ulong va, ulong size)
+@@ -83,7 +154,7 @@ namespace Ryujinx.Cpu.Jit
+         {
+             AssertValidAddressAndSize(va, size);
+ 
+-            _addressSpace.MapView(_backingMemory, pa, va, size);
++            _addressSpace.MapView(_backingMemory, pa, ToOffset(va), size);
+             _pages.AddMapping(va, size);
+             PtMap(va, pa, size);
+ 
+@@ -112,7 +183,7 @@ namespace Ryujinx.Cpu.Jit
+ 
+             _pages.RemoveMapping(va, size);
+             PtUnmap(va, size);
+-            _addressSpace.UnmapView(_backingMemory, va, size);
++            _addressSpace.UnmapView(_backingMemory, ToOffset(va), size);
+         }
+ 
+         private void PtUnmap(ulong va, ulong size)
+@@ -129,6 +200,10 @@ namespace Ryujinx.Cpu.Jit
+         /// <inheritdoc/>
+         public void Reprotect(ulong va, ulong size, MemoryPermission permission)
+         {
++            // Required for NCE: MapView creates RW pages; SetProcessMemoryPermission
++            // must mprotect guest .text to RX or instruction fetch SIGSEGVs.
++            AssertValidAddressAndSize(va, size);
++            _addressSpace.Reprotect(ToOffset(va), size, permission, false);
+         }
+ 
+         public ref T GetRef<T>(ulong va) where T : unmanaged
+@@ -152,6 +227,14 @@ namespace Ryujinx.Cpu.Jit
+         /// <inheritdoc/>
+         public bool IsRangeMapped(ulong va, ulong size)
+         {
++            if (IsIdentityMapped)
++            {
++                // The kernel's address space ([0, 2^39)) is a superset of the identity window,
++                // so a guest-supplied pointer can legitimately be "inside the address space but
++                // outside the window": that is simply not mapped, not a caller bug.
++                return ValidateAddressAndSize(va, size) && _pages.IsRangeMapped(va, size);
++            }
++
+             AssertValidAddressAndSize(va, size);
+ 
+             return _pages.IsRangeMapped(va, size);
+@@ -267,7 +350,7 @@ namespace Ryujinx.Cpu.Jit
+         {
+             if (guest)
+             {
+-                _addressSpace.Reprotect(va, size, protection, false);
++                _addressSpace.Reprotect(ToOffset(va), size, protection, false);
+             }
+             else
+             {
+@@ -296,7 +379,7 @@ namespace Ryujinx.Cpu.Jit
+         protected override void Destroy()
+         {
+             _addressSpace.Dispose();
+-            _memoryEh.Dispose();
++            _memoryEh?.Dispose();
+         }
+ 
+         protected override Memory<byte> GetPhysicalAddressMemory(nuint pa, int size)
+diff --git a/src/Ryujinx.Memory/MemoryBlock.cs b/src/Ryujinx.Memory/MemoryBlock.cs
+index 0b03d2bf7..0d915f628 100644
+--- a/src/Ryujinx.Memory/MemoryBlock.cs
++++ b/src/Ryujinx.Memory/MemoryBlock.cs
+@@ -62,6 +62,43 @@ namespace Ryujinx.Memory
+             Size = size;
+         }
+ 
++        /// <summary>
++        /// Creates a reserved, view-compatible memory block at a fixed host address.
++        /// </summary>
++        /// <param name="size">Size of the reservation in bytes</param>
++        /// <param name="address">Exact host address the reservation must start at</param>
++        private MemoryBlock(ulong size, nint address, bool reserveAt)
++        {
++            _viewCompatible = true;
++            _pointer = address;
++            Size = size;
++        }
++
++        /// <summary>
++        /// Tries to reserve <paramref name="size"/> bytes exactly at <paramref name="address"/>.
++        /// The block is view-compatible (pages can be mapped from a shared-memory backing block).
++        /// Fails (returns false) if any part of the range is already mapped.
++        /// </summary>
++        /// <param name="size">Size of the reservation in bytes</param>
++        /// <param name="address">Exact host address the reservation must start at</param>
++        /// <param name="block">Reserved block on success</param>
++        /// <returns>True on success, false if the range was unavailable</returns>
++        public static bool TryReserveAt(ulong size, nint address, out MemoryBlock block)
++        {
++            block = null;
++
++            nint pointer = MemoryManagement.ReserveAt(address, size);
++
++            if (pointer == nint.Zero)
++            {
++                return false;
++            }
++
++            block = new MemoryBlock(size, pointer, true);
++
++            return true;
++        }
++
+         /// <summary>
+         /// Creates a new instance of the memory block class, with a existing backing storage.
+         /// </summary>
+diff --git a/src/Ryujinx.Memory/MemoryManagement.cs b/src/Ryujinx.Memory/MemoryManagement.cs
+index 67bb0a1bb..7ab6b4684 100644
+--- a/src/Ryujinx.Memory/MemoryManagement.cs
++++ b/src/Ryujinx.Memory/MemoryManagement.cs
+@@ -37,6 +37,20 @@ namespace Ryujinx.Memory
+             }
+         }
+ 
++        /// <summary>
++        /// Reserves a range exactly at the given address, or returns <see cref="nint.Zero"/>
++        /// if the range is unavailable. Only supported on Unix-like hosts.
++        /// </summary>
++        public static nint ReserveAt(nint address, ulong size)
++        {
++            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || PlatformInfo.IsBionic)
++            {
++                return MemoryManagementUnix.ReserveAt(address, size);
++            }
++
++            return nint.Zero;
++        }
++
+         public static void Commit(nint address, ulong size, bool forJit)
+         {
+             if (OperatingSystem.IsWindows())
+diff --git a/src/Ryujinx.Memory/MemoryManagementUnix.cs b/src/Ryujinx.Memory/MemoryManagementUnix.cs
+index 14de630ed..a272435e1 100644
+--- a/src/Ryujinx.Memory/MemoryManagementUnix.cs
++++ b/src/Ryujinx.Memory/MemoryManagementUnix.cs
+@@ -25,6 +25,42 @@ namespace Ryujinx.Memory
+             return AllocateInternal(size, MmapProts.PROT_NONE, forJit);
+         }
+ 
++        /// <summary>
++        /// Reserves <paramref name="size"/> bytes exactly at <paramref name="address"/>, without
++        /// replacing any existing mapping. Returns <see cref="nint.Zero"/> if the range is not free.
++        /// Used by NCE to place the guest address space at a chosen host address so that
++        /// guest VA == host pointer.
++        /// </summary>
++        public static nint ReserveAt(nint address, ulong size)
++        {
++            MmapFlags flags = MmapFlags.MAP_ANONYMOUS | MmapFlags.MAP_PRIVATE | MmapFlags.MAP_NORESERVE | MmapFlags.MAP_FIXED_NOREPLACE;
++
++            nint ptr = Mmap(address, size, MmapProts.PROT_NONE, flags, -1, 0);
++
++            if (ptr == MAP_FAILED)
++            {
++                return nint.Zero;
++            }
++
++            // Kernels without MAP_FIXED_NOREPLACE treat the address as a hint and may
++            // return a different range: that is not what we asked for, so release it.
++            if (ptr != address)
++            {
++                munmap(ptr, size);
++
++                return nint.Zero;
++            }
++
++            if (!_allocations.TryAdd(ptr, size))
++            {
++                munmap(ptr, size);
++
++                throw new InvalidOperationException();
++            }
++
++            return ptr;
++        }
++
+         private static nint AllocateInternal(ulong size, MmapProts prot, bool forJit, bool shared = false)
+         {
+             MmapFlags flags = MmapFlags.MAP_ANONYMOUS;
+diff --git a/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs b/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs
+index 536ff972e..1504a5827 100644
+--- a/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs
++++ b/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs
+@@ -27,6 +27,7 @@ namespace Ryujinx.Memory
+             MAP_NORESERVE = 8,
+             MAP_FIXED = 16,
+             MAP_UNLOCKED = 32,
++            MAP_FIXED_NOREPLACE = 64,
+             MAP_JIT_DARWIN = 0x800,
+         }
+ 
+@@ -50,6 +51,7 @@ namespace Ryujinx.Memory
+         private const int MAP_ANONYMOUS_LINUX_GENERIC = 0x20;
+         private const int MAP_NORESERVE_LINUX_GENERIC = 0x4000;
+         private const int MAP_UNLOCKED_LINUX_GENERIC = 0x80000;
++        private const int MAP_FIXED_NOREPLACE_LINUX_GENERIC = 0x100000;
+ 
+         private const int MAP_NORESERVE_DARWIN = 0x40;
+         private const int MAP_ANONYMOUS_DARWIN = 0x1000;
+@@ -160,6 +162,16 @@ namespace Ryujinx.Memory
+                 }
+             }
+ 
++            if (flags.HasFlag(MmapFlags.MAP_FIXED_NOREPLACE))
++            {
++                if (OperatingSystem.IsLinux() || PlatformInfo.IsBionic)
++                {
++                    result |= MAP_FIXED_NOREPLACE_LINUX_GENERIC;
++                }
++                // Darwin: no equivalent; the address is treated as a hint and the
++                // caller must verify the returned pointer.
++            }
++
+             if (flags.HasFlag(MmapFlags.MAP_JIT_DARWIN) && OperatingSystem.IsMacOSVersionAtLeast(10, 14))
+             {
+                 result |= (int)MmapFlags.MAP_JIT_DARWIN;
+diff --git a/src/Ryujinx.Memory/VirtualMemoryManagerBase.cs b/src/Ryujinx.Memory/VirtualMemoryManagerBase.cs
+index cd50b4152..af0e2bf8e 100644
+--- a/src/Ryujinx.Memory/VirtualMemoryManagerBase.cs
++++ b/src/Ryujinx.Memory/VirtualMemoryManagerBase.cs
+@@ -371,7 +371,7 @@ namespace Ryujinx.Memory
+         /// <param name="va">Virtual address</param>
+         /// <returns>True if the virtual address is part of the addressable space</returns>
+         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+-        protected bool ValidateAddress(ulong va)
++        protected virtual bool ValidateAddress(ulong va)
+         {
+             return va < AddressSpaceSize;
+         }
+@@ -382,7 +382,7 @@ namespace Ryujinx.Memory
+         /// <param name="va">Virtual address of the range</param>
+         /// <param name="size">Size of the range in bytes</param>
+         /// <returns>True if the combination of virtual address and size is part of the addressable space</returns>
+-        protected bool ValidateAddressAndSize(ulong va, ulong size)
++        protected virtual bool ValidateAddressAndSize(ulong va, ulong size)
+         {
+             ulong endVa = va + size;
+             return endVa >= va && endVa >= size && endVa <= AddressSpaceSize;
+-- 
+2.45.0
+

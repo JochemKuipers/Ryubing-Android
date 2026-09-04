@@ -10,7 +10,7 @@ namespace LibRyubing
     /// </summary>
     internal sealed class EmulatorSettings
     {
-        public MemoryConfiguration MemoryConfiguration { get; set; } = MemoryConfiguration.MemoryConfiguration4GiB;
+        public MemoryConfiguration MemoryConfiguration { get; set; } = MemoryConfiguration.MemoryConfiguration8GiB;
 
         /// <summary>Values match <c>Ryujinx.HLE.HOS.SystemState.SystemLanguage</c>.</summary>
         public int SystemLanguage { get; set; } = 1; // AmericanEnglish
@@ -55,6 +55,12 @@ namespace LibRyubing
         /// Default off until homebrew E2E validation; enable via ryubing_set_cpu_config.
         /// </summary>
         public bool UseNce { get; set; }
+
+        /// <summary>
+        /// NCE native/managed debug verbosity: 0=Off, 1=Errors, 2=Standard, 3=Verbose.
+        /// Default Verbose while bringing NCE up on device.
+        /// </summary>
+        public int NceDebugLevel { get; set; } = 3;
 
         public BackendThreading BackendThreading { get; set; } = BackendThreading.Auto;
 

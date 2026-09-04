@@ -11,6 +11,8 @@
 #include <span>
 #include <vector>
 
+#include <sys/mman.h>
+
 #include "host_mapped_memory.h"
 #include "interpreter_visitor.h"
 
@@ -122,6 +124,58 @@ int main() {
         }
     }
 
-    std::printf("ok: host_mapped_memory + LDR/STR interpreter\n");
+    // --- Same LDR case against a window mapped at a high identity-style base ---
+    // NCE guest VAs are host pointers >= 2^36; make sure nothing in the
+    // interpreter or HostMappedMemory truncates or mis-compares such addresses.
+    {
+        constexpr uint64_t HighBaseHint = 0x5000000000ull; // 320 GiB
+        constexpr size_t HighSize = 0x10000;
+        void* mapped = mmap(reinterpret_cast<void*>(HighBaseHint), HighSize, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mapped == MAP_FAILED) {
+            return Fail("mmap for high-base case failed");
+        }
+        const uint64_t high_base = reinterpret_cast<uint64_t>(mapped);
+        if (high_base < (1ull << 36)) {
+            std::printf("note: kernel placed high-base mapping at 0x%llx (< 2^36); still testing\n",
+                        (unsigned long long)high_base);
+        }
+        HostMappedMemory high(high_base, HighSize);
+
+        auto* bytes = static_cast<uint8_t*>(mapped);
+        constexpr uint32_t HighPayload = 0x0BADF00Du;
+        std::memcpy(bytes + 0x801, &HighPayload, sizeof(HighPayload)); // misaligned
+        std::memcpy(bytes + 0x100, &LDR_W0_X1, sizeof(LDR_W0_X1));
+
+        if (!high.Contains(high_base + 0x801, 4) || high.Contains(high_base - 1, 1) ||
+            high.Contains(high_base + HighSize, 1)) {
+            return Fail("HostMappedMemory Contains wrong at high base");
+        }
+
+        std::array<u64, 31> regs{};
+        std::array<u128, 32> vregs{};
+        u64 sp = high_base + 0x8000;
+        const u64 pc = high_base + 0x100;
+        regs[1] = high_base + 0x801;
+
+        InterpreterVisitor visitor(high, std::span<u64, 31>{regs.data(), 31},
+                                   std::span<u128, 32>{vregs.data(), 32}, sp, pc);
+        const uint32_t insn = high.Read32(pc);
+        if (insn != LDR_W0_X1) {
+            return Fail("Read32 at high PC returned wrong instruction");
+        }
+        auto decoded = Dynarmic::A64::Decode<VisitorBase, bool>(visitor, insn);
+        if (!decoded || !*decoded) {
+            return Fail("LDR at high base not decoded/executed");
+        }
+        if (static_cast<uint32_t>(regs[0]) != HighPayload) {
+            std::fprintf(stderr, "FAIL: high-base LDR result 0x%llx expected 0x%x\n",
+                         static_cast<unsigned long long>(regs[0]), HighPayload);
+            return 1;
+        }
+        munmap(mapped, HighSize);
+    }
+
+    std::printf("ok: host_mapped_memory + LDR/STR interpreter (incl. high identity base)\n");
     return 0;
 }

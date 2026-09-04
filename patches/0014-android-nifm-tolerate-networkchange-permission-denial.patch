@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000014 Mon Sep 17 00:00:00 2001
+From: Ryubing Android <android@ryubing.local>
+Date: Fri, 4 Sep 2026 22:30:00 +0200
+Subject: [PATCH] android: tolerate Nifm NetworkChange permission denial
+
+Android denies the netlink socket NetworkChange opens. Catch
+NetworkInformationException so CreateGeneralService does not abort the
+process; GetLocalInterface already returns NoInternetConnection.
+
+---
+diff --git a/src/Ryujinx.HLE/HOS/Services/Nifm/StaticService/IGeneralService.cs b/src/Ryujinx.HLE/HOS/Services/Nifm/StaticService/IGeneralService.cs
+index dd4efce6e..2d84b73fc 100644
+--- a/src/Ryujinx.HLE/HOS/Services/Nifm/StaticService/IGeneralService.cs
++++ b/src/Ryujinx.HLE/HOS/Services/Nifm/StaticService/IGeneralService.cs
+@@ -26,7 +26,18 @@ namespace Ryujinx.HLE.HOS.Services.Nifm.StaticService
+                 IsAnyInternetRequestAccepted = !context.Device.DirtyHacks.IsEnabled(DirtyHack.NifmServiceDisableIsAnyInternetRequestAccepted), // NOTE: Why not accept any internet request?
+             };
+ 
+-            NetworkChange.NetworkAddressChanged += LocalInterfaceCacheHandler;
++            // Android (and some sandboxed hosts) deny the netlink socket that
++            // NetworkChange opens; a failure here must not take down the process —
++            // GetLocalInterface already returns NoInternetConnection without a cache.
++            try
++            {
++                NetworkChange.NetworkAddressChanged += LocalInterfaceCacheHandler;
++            }
++            catch (NetworkInformationException ex)
++            {
++                Logger.Warning?.Print(LogClass.ServiceNifm,
++                    $"NetworkChange.NetworkAddressChanged unavailable ({ex.Message}); interface cache will not auto-invalidate.");
++            }
+ 
+             GeneralServiceManager.Add(_generalServiceDetail);
+         }
+@@ -197,7 +208,14 @@ namespace Ryujinx.HLE.HOS.Services.Nifm.StaticService
+         {
+             if (isDisposing)
+             {
+-                NetworkChange.NetworkAddressChanged -= LocalInterfaceCacheHandler;
++                try
++                {
++                    NetworkChange.NetworkAddressChanged -= LocalInterfaceCacheHandler;
++                }
++                catch (NetworkInformationException)
++                {
++                    // Mirror the ctor: unsubscribe may also need the netlink socket.
++                }
+ 
+                 GeneralServiceManager.Remove(_generalServiceDetail.ClientId);
+             }

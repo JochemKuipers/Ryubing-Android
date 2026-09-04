@@ -4,14 +4,15 @@
   "upstream_branch": "master",
   "upstream_tag": "Canary-1.3.351",
   "upstream_commit": "475615f0431b4995b03c930c5089d20f6f3570e0",
-  "patches_applied": 10,
+  "patches_applied": 14,
   "known_breakages": [],
   "smoke_tests_passed": [],
   "notes": [
     "Upstream pin is pristine Ryubing; Android fixes live in patches/ (Kenji libryujinx_bionic port + Ryubing-native fixes)",
     "LibRyubing sets PlatformInfo.IsBionic at init (adapter layer, not in upstream)",
-    "Do not git-am patches into upstream/ryubing — applyUpstreamPatches applies them at build time",
+    "Do not git-am patches into upstream/ryubing \u2014 applyUpstreamPatches applies them at build time",
     "Canary-1.3.338 -> 1.3.351: patch 0003 regenerated (upstream added 'using ARMeilleure.Translation.PTC' to JitCpuContext/LightningJitCpuContext); LibRyubing SkiaSharp pins bumped 2.88.9 -> 3.119.4 to match upstream Directory.Packages.props",
-    "libryubing.so NativeAOT publish verified against this pin (NDK r27c, linux-bionic-arm64)"
+    "libryubing.so NativeAOT publish verified against this pin (NDK r27c, linux-bionic-arm64)",
+    "Patches 0011-0013 implement the NCE identity-mapped address space; 0014 makes Nifm NetworkChange resilient on Android."
   ]
 }

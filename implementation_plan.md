@@ -23,7 +23,16 @@ NativeAOT core as `libryubing-nce.so`, driven through P/Invoke from managed
 NCE is **opt-in** (Settings → “Native Code Execution (NCE)”, default off). Requires
 ARM64 host, HostMapped memory, 64-bit guest, and `libryubing-nce.so`.
 
-ABI version: **3**. Version string: `ryubing-nce 0.7.1 (phase 6: alignment interpreter)`.
+ABI version: **3**. Version string: `ryubing-nce 0.7.2 (direct-map host PC)`.
+
+## Address model (critical)
+
+NCE requires **host-dereferenceable** guest pointers (Eden direct-map):
+
+- Native PC/SP/TPIDR/mapped GPRs = `PageTablePointer + traditionalGuestVa`
+- HLE still uses traditional guest VAs; `NceCpuContext` converts at SVC/interrupt boundaries
+- `MemoryManagerHostMapped.EnableDirectMappedAddress` accepts both VA forms
+- Module patching passes `PageTablePointer + nsoBase` so trampoline keys are host PCs
 
 ## What NCE Is (Eden ground truth)
 

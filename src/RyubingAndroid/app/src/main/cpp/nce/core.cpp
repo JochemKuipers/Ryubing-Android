@@ -22,10 +22,7 @@
 
 #include "core.h"
 #include "guest_context.h"
-
-#define LOG_TAG "RyubingNCE"
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#include "nce_log.h"
 
 namespace Ryubing::Nce {
 
@@ -92,7 +89,7 @@ int InstallSignalHandlers() {
         return_to_run_action.sa_mask = signal_mask;
         if (RealSigAction(ReturnToRunCodeByExceptionLevelChangeSignal,
                           &return_to_run_action, nullptr) != 0) {
-            LOGE("Failed to install SIGUSR2 handler: %s", strerror(errno));
+            NCE_LOGE("Failed to install SIGUSR2 handler: %s", strerror(errno));
             result = -1;
             return;
         }
@@ -104,7 +101,7 @@ int InstallSignalHandlers() {
             reinterpret_cast<HandlerType>(&nce_signal_handler_break_from_run);
         break_action.sa_mask = signal_mask;
         if (RealSigAction(BreakFromRunCodeSignal, &break_action, nullptr) != 0) {
-            LOGE("Failed to install SIGURG handler: %s", strerror(errno));
+            NCE_LOGE("Failed to install SIGURG handler: %s", strerror(errno));
             result = -1;
             return;
         }
@@ -118,7 +115,7 @@ int InstallSignalHandlers() {
         alignment_action.sa_mask = signal_mask;
         if (RealSigAction(GuestAlignmentFaultSignal, &alignment_action,
                           &g_orig_bus_action) != 0) {
-            LOGE("Failed to install SIGBUS handler: %s", strerror(errno));
+            NCE_LOGE("Failed to install SIGBUS handler: %s", strerror(errno));
             result = -1;
             return;
         }
@@ -131,12 +128,12 @@ int InstallSignalHandlers() {
             reinterpret_cast<HandlerType>(&nce_signal_handler_access_fault);
         access_action.sa_mask = signal_mask;
         if (RealSigAction(GuestAccessFaultSignal, &access_action, &g_orig_segv_action) != 0) {
-            LOGE("Failed to install SIGSEGV handler: %s", strerror(errno));
+            NCE_LOGE("Failed to install SIGSEGV handler: %s", strerror(errno));
             result = -1;
             return;
         }
 
-        LOGI("NCE signal handlers installed (SIGUSR2, SIGURG, SIGBUS, SIGSEGV)");
+        NCE_LOGI("NCE signal handlers installed (SIGUSR2, SIGURG, SIGBUS, SIGSEGV)");
         result = 0;
     });
 
@@ -156,7 +153,7 @@ int SetupThreadSignalStack() {
     ss.ss_size = SignalStackSize;
     ss.ss_flags = 0;
     if (sigaltstack(&ss, nullptr) != 0) {
-        LOGE("sigaltstack failed: %s", strerror(errno));
+        NCE_LOGE("sigaltstack failed: %s", strerror(errno));
         delete[] stack;
         return -1;
     }
@@ -194,16 +191,35 @@ void NceCore::SignalInterrupt() {
     std::atomic_thread_fence(std::memory_order_acquire);
 
     if (m_thread_params.is_running) {
+        NCE_LOG_VERBOSE("SignalInterrupt: tkill tid=%d SIGURG", m_thread_id);
         syscall(SYS_tkill, m_thread_id, BreakFromRunCodeSignal);
     } else {
+        NCE_LOG_VERBOSE("SignalInterrupt: core idle (no tkill)");
         nce_unlock_thread_parameters(&m_thread_params);
     }
 }
 
 uint64_t NceCore::RunThread(uint64_t trampoline_addr) {
+    // EnterContext (eden PhysicalCore::RunThread): own the thread parameters for
+    // the whole host-side part of this call. The lock protocol is:
+    //   - locked   while this thread is in host code between here and guest entry,
+    //              and again from guest exit (SVC trampoline LockContext, fault
+    //              handler store, or a SignalInterrupt sender that tkill'd us)
+    //              until ExitContext below;
+    //   - unlocked while executing guest code (SIGUSR2 entry handler / trampoline
+    //              UnlockContext release it) and while the thread is parked in
+    //              managed code outside RunThread.
+    // SignalInterrupt acquires the lock, so it can only observe a consistent
+    // is_running/native_context pair, and it never spins on a thread that is
+    // blocked in the managed scheduler. Without this bracket the lock taken by
+    // the SVC trampoline leaked across the whole managed SVC/scheduler section
+    // and the next SignalInterrupt for that core (or for ourselves) spun forever.
+    nce_lock_thread_parameters(&m_thread_params);
+
     // Check if we're already interrupted. If so, return immediately.
     uint64_t hr = m_guest_ctx.esr_el1.exchange(0);
     if (hr != 0) {
+        nce_unlock_thread_parameters(&m_thread_params);
         return hr;
     }
 
@@ -244,6 +260,11 @@ uint64_t NceCore::RunThread(uint64_t trampoline_addr) {
 
     // Non-critical updates can happen after releasing the thread.
     m_guest_ctx.tpidr_el0 = final_tpidr_el0;
+
+    // ExitContext: release the parameters (eden ArmNce::UnlockThread). A
+    // SignalInterrupt that raced us will now find is_running == false and only
+    // leave its BreakLoop bit in esr_el1, which the next RunThread returns at once.
+    nce_unlock_thread_parameters(&m_thread_params);
 
     return hr;
 }

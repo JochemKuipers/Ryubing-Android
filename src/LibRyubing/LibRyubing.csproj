@@ -84,6 +84,11 @@
     <RdXmlFile Include="rd.xml" />
   </ItemGroup>
 
+  <!-- Host unit tests (src/LibRyubing.Tests) exercise the internal NCE helpers. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="LibRyubing.Tests" />
+  </ItemGroup>
+
   <!-- Android needs logcat; the .NET 8 bionic version-script workaround is applied
        for older NDKs (see dotnet/runtime#92272). -->
   <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-bionic-arm64'">

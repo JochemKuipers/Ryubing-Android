@@ -32,7 +32,7 @@ object RyubingNative {
     interface Core : Library {
         fun ryubing_initialize(appDataPath: String): Int
         fun ryubing_set_memory_config(memoryConfiguration: Int, memoryManagerMode: Int)
-        fun ryubing_set_cpu_config(useNce: Int)
+        fun ryubing_set_cpu_config(useNce: Int, nceDebugLevel: Int)
         fun ryubing_set_system_config(language: Int, region: Int, enableDockedMode: Int, enablePtc: Int)
         fun ryubing_set_system_config_ex(
             enableLowPowerPtc: Int,

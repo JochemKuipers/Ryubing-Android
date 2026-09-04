@@ -64,6 +64,8 @@ namespace LibRyubing
         private static readonly object LifecycleLock = new();
 
         private static volatile bool _isActive;
+        private static long _presentedFrames;
+        private static long _bootStartTicks;
         private static volatile bool _isStopped;
         private static volatile bool _screenshotRequested;
         private static readonly object _screenshotLock = new();
@@ -355,17 +357,27 @@ namespace LibRyubing
             // Still default-off; factory also gates on HostMapped + ARM64 host + 64-bit guest.
             if (settings.UseNce)
             {
-                if (LibRyubing.Nce.NceNative.CheckAvailable())
-                {
-                    config.UseNce = true;
-                    config.CpuEngineFactory = tickSource => new LibRyubing.Nce.NceEngine(tickSource);
-                    config.NceModulePatcher = new LibRyubing.Nce.NceModulePatcher();
-                    Logger.Info?.Print(LogClass.Application, "NCE CPU backend requested and available");
-                }
-                else
+                if (!LibRyubing.Nce.NceNative.CheckAvailable())
                 {
                     Logger.Warning?.Print(LogClass.Application,
                         "UseNce set but libryubing-nce.so is unavailable; falling back to JIT");
+                }
+                else if (!LibRyubing.Nce.NceAddressSpace.TryReserve(out Ryujinx.Memory.MemoryBlock nceWindow))
+                {
+                    Logger.Warning?.Print(LogClass.Application,
+                        "UseNce set but no identity-mapped address space window could be reserved; falling back to JIT");
+                }
+                else
+                {
+                    LibRyubing.Nce.NceNative.ApplyDebugLevel(settings.NceDebugLevel);
+                    config.UseNce = true;
+                    config.CpuEngineFactory = tickSource => new LibRyubing.Nce.NceEngine(tickSource);
+                    config.NceModulePatcher = new LibRyubing.Nce.NceModulePatcher();
+                    config.NceAddressSpaceWindow = nceWindow;
+                    Logger.Info?.Print(LogClass.Application,
+                        $"NCE CPU backend requested and available (debug level={settings.NceDebugLevel}, native={LibRyubing.Nce.NceNative.VersionString})");
+
+                    LibRyubing.Nce.NceSelfTest.RunIfEnabled(settings, (ulong)nceWindow.Pointer, nceWindow.Size);
                 }
             }
 
@@ -425,6 +437,8 @@ namespace LibRyubing
             _gpuFrameLoopDone = new ManualResetEventSlim(false);
             _isActive = true;
             _isStopped = false;
+            _presentedFrames = 0;
+            _bootStartTicks = Environment.TickCount64;
 
             _gpuThread = new Thread(GpuLoop) { Name = "Ryubing.GpuLoop" };
             _gpuThread.Start();
@@ -480,6 +494,15 @@ namespace LibRyubing
                                         && threaded.BaseRenderer is VulkanRenderer vulkanRenderer)
                                     {
                                         NativeJni.SetCurrentTransform((int)vulkanRenderer.CurrentTransform);
+                                    }
+
+                                    // Boot milestone for the smoke triage: the first presented frame is
+                                    // the point where the guest is provably past a black screen.
+                                    long presented = Interlocked.Increment(ref _presentedFrames);
+                                    if (presented == 1 || presented == 60 || presented == 600)
+                                    {
+                                        Logger.Info?.Print(LogClass.Gpu,
+                                            $"BOOT|PRESENT frames={presented} uptimeMs={Environment.TickCount64 - _bootStartTicks}");
                                     }
                                 });
                             }

@@ -25,12 +25,16 @@ extern "C" {
 
 // --- Version / capability query (always available) ---
 
-#define RYUBING_NCE_ABI_VERSION 3
+#define RYUBING_NCE_ABI_VERSION 4
 
 int32_t nce_get_abi_version(void);
 
 // Returns a human-readable version string (static storage, no free needed).
 const char* nce_get_version_string(void);
+
+// NCE debug verbosity (0=Off, 1=Errors, 2=Standard, 3=Verbose). Default Off.
+// Safe to call before nce_initialize. Affects native logcat under tag RyubingNCE.
+void nce_set_debug_level(int32_t level);
 
 // --- Guest memory / page-fault integration (phase 5) ---
 
@@ -42,12 +46,51 @@ const char* nce_get_version_string(void);
 //   is_write: 1 if the access was a store (ESR WnR), 0 if a load
 typedef int32_t (*NcePageFaultHandler)(uint64_t guest_va, uint64_t size, int32_t is_write);
 
-// Registers the host-mapped guest address space and an optional page-fault
-// callback (GPU tracking / remapping). Pass handler=NULL to clear.
-// host_base is the host pointer returned as IMemoryManager.PageTablePointer
-// (guest VA 0). Safe to call before or after nce_initialize.
-void nce_set_memory_config(uint64_t host_base, uint64_t address_space_size,
+// Registers the identity-mapped guest window [window_base, window_base+size)
+// and an optional page-fault callback (GPU tracking / remapping). Guest VAs
+// are host pointers (Eden EnableDirectMappedAddress), so the fault address is
+// passed to the handler untranslated. Pass handler=NULL to clear. Safe to call
+// before or after nce_initialize.
+void nce_set_memory_config(uint64_t window_base, uint64_t window_size,
                            NcePageFaultHandler handler);
+
+// --- Self test ---
+
+// Stage bits for NceSelfTestResult (must match LibRyubing.Nce.NceSelfTest.Stage).
+typedef enum NceSelfTestStage {
+    NCE_SELFTEST_SETUP         = 1u << 0, // scratch mapping, patching, core creation
+    NCE_SELFTEST_EXECUTE       = 1u << 1, // guest code ran at all
+    NCE_SELFTEST_LOAD_STORE    = 1u << 2, // plain LDR/STR through the identity window
+    NCE_SELFTEST_SVC           = 1u << 3, // SVC trampoline halted with SupervisorCall + number
+    NCE_SELFTEST_SVC_REGISTERS = 1u << 4, // X0 in/out fidelity across the SVC round trip
+    NCE_SELFTEST_ALIGNMENT     = 1u << 5, // misaligned LDAR handled by the SIGBUS interpreter
+    NCE_SELFTEST_DATA_ABORT    = 1u << 6, // access fault surfaced as HaltReason::DataAbort
+    NCE_SELFTEST_CLEANUP       = 1u << 7, // scratch restored to PROT_NONE, trampolines restored
+    NCE_SELFTEST_INTERRUPT     = 1u << 8, // SignalInterrupt breaks a spinning guest; idle-core interrupt does not block
+} NceSelfTestStage;
+
+// Layout must match LibRyubing.Nce.NceNative.NceSelfTestResult exactly.
+typedef struct NceSelfTestResult {
+    uint32_t stages_run;
+    uint32_t stages_failed;
+    uint32_t observed_svc_number;
+    uint32_t reserved0;
+    uint64_t observed_svc_x0;
+    uint64_t observed_store_value;
+    uint64_t observed_alignment_value;
+    uint64_t observed_halt_reason;
+    uint64_t observed_fault_pc;
+    uint64_t scratch_address;
+} NceSelfTestResult;
+
+// Runs a tiny patched guest snippet through the real run loop, inside the top
+// of the reserved identity window [window_base, window_base+window_size), and
+// exercises load/store, the SVC trampoline round trip, the alignment-fault
+// interpreter and the access-fault (DataAbort) path. Temporarily installs the
+// window as the memory config (no page-fault handler) and restores the previous
+// config and trampoline registry afterwards. Must be called on a thread that is
+// not currently running guest code. Returns 0 when every stage passed.
+int32_t nce_self_test(uint64_t window_base, uint64_t window_size, NceSelfTestResult* out_result);
 
 // --- Guest code patching (phase 1) ---
 

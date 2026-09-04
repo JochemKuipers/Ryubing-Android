@@ -19,6 +19,11 @@ data class EmulatorConfig(
     val memoryManagerMode: Int = 2,     // HostMappedUnsafe
     /** Prefer NCE (Native Code Execution) on ARM64 + HostMapped. Default off. */
     val useNce: Boolean = false,
+    /**
+     * NCE debug verbosity (Eden-style): 0=Off, 1=Errors, 2=Standard, 3=Verbose.
+     * Default Verbose while bringing up NCE on device.
+     */
+    val nceDebugLevel: Int = 3,
     val systemLanguage: Int = 1,        // AmericanEnglish
     val systemRegion: Int = 1,          // USA
     val dockedMode: Boolean = false,

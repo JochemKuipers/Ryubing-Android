@@ -16,6 +16,7 @@ class SettingsRepository(private val context: Context) {
         memoryConfiguration = prefs.getInt(KEY_MEM_CONFIG, defaultMemoryConfiguration()),
         memoryManagerMode = prefs.getInt(KEY_MEM_MODE, 2),
         useNce = prefs.getBoolean(KEY_USE_NCE, false),
+        nceDebugLevel = prefs.getInt(KEY_NCE_DEBUG_LEVEL, 3).coerceIn(0, 3),
         systemLanguage = prefs.getInt(KEY_LANGUAGE, 1),
         systemRegion = prefs.getInt(KEY_REGION, 1),
         dockedMode = prefs.getBoolean(KEY_DOCKED, false),
@@ -66,6 +67,7 @@ class SettingsRepository(private val context: Context) {
         putInt(KEY_MEM_CONFIG, config.memoryConfiguration)
         putInt(KEY_MEM_MODE, config.memoryManagerMode)
         putBoolean(KEY_USE_NCE, config.useNce)
+        putInt(KEY_NCE_DEBUG_LEVEL, config.nceDebugLevel.coerceIn(0, 3))
         putInt(KEY_LANGUAGE, config.systemLanguage)
         putInt(KEY_REGION, config.systemRegion)
         putBoolean(KEY_DOCKED, config.dockedMode)
@@ -111,21 +113,29 @@ class SettingsRepository(private val context: Context) {
     }
 
     /**
-     * 6 GiB guest DRAM on devices with at least 8 GiB of RAM; retail 4 GiB otherwise.
-     * Pokémon-scale titles hit MapPhysicalMemory limits at 4 GiB when DLC is installed.
+     * Prefer enough guest DRAM for Pokémon-scale MapPhysicalMemory.
+     * 12 GiB when the device has ≥12 GiB RAM; 8 GiB at ≥8 GiB; else 6 GiB at ≥6 GiB; else 4 GiB.
+     * (Enum: 0=4GiB, 1=6GiB, 2=8GiB, 3=12GiB.)
      */
     private fun defaultMemoryConfiguration(): Int {
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             ?: return 0
         val info = ActivityManager.MemoryInfo()
         activityManager.getMemoryInfo(info)
-        return if (info.totalMem >= 8L * 1024 * 1024 * 1024) 1 else 0
+        val gb = info.totalMem / (1024L * 1024L * 1024L)
+        return when {
+            gb >= 12L -> 3 // 12 GiB
+            gb >= 8L -> 2  // 8 GiB
+            gb >= 6L -> 1  // 6 GiB
+            else -> 0
+        }
     }
 
     private companion object {
         const val KEY_MEM_CONFIG = "mem_config"
         const val KEY_MEM_MODE = "mem_mode"
         const val KEY_USE_NCE = "use_nce"
+        const val KEY_NCE_DEBUG_LEVEL = "nce_debug_level"
         const val KEY_LANGUAGE = "language"
         const val KEY_REGION = "region"
         const val KEY_DOCKED = "docked"

@@ -1,0 +1,316 @@
+From 0000000000000000000000000000000000000012 Mon Sep 17 00:00:00 2001
+From: Ryubing Android <ryubing-android@local>
+Date: Fri, 4 Sep 2026 21:00:00 +0200
+Subject: [PATCH 12/13] nce: offset the 39-bit kernel layout by the identity window base; fill GetInfo entropy
+
+With an identity-mapped address space the kernel must lay the process out
+inside the reserved host window (Eden passes fastmem_base as aslr_space_start).
+
+- IProcessContext/ArmProcessContext/ProcessContext: expose AddressSpaceBase.
+- KPageTable/KPageTableBase: accept the reserved base. For 39-bit processes with
+  a base, code starts at base + 0x8000000 and AslrRegion = [base + 0x8000000,
+  window end). The address space itself stays [0, 2^39) exactly like real
+  hardware and Eden (m_address_space_start/end): rtld discovers the loaded NSOs
+  by walking QueryMemory from address 0 until the cursor wraps, so an address
+  space starting at the window base makes QueryMemory(0) return the "outside"
+  descriptor (end wraps to 0), the walk ends before the first module and rtld
+  aborts with "Unresolved symbol: nn::init::Start". Only region *placement*
+  (alias/heap/stack/tlsio) is bounded to the window; they keep their real sizes
+  when the window is >= 256 GiB and shrink for a 2^37 window (alias extra =
+  window/8 in that case). Emits an NCE|LAYOUT line incl. the window.
+- MemoryManagerHostNoMirror.IsRangeMapped (0011) returns false instead of
+  throwing for VAs inside the kernel space but outside the window.
+- KProcess: pass Context.AddressSpaceBase to KPageTable; fill RandomEntropy
+  (svcGetInfo RandomEntropy was a TODO; nnSdk ASLR aborts on zero entropy).
+
+diff --git a/src/Ryujinx.HLE/HOS/ArmProcessContext.cs b/src/Ryujinx.HLE/HOS/ArmProcessContext.cs
+index 99afc2aec..a4a705e1b 100644
+--- a/src/Ryujinx.HLE/HOS/ArmProcessContext.cs
++++ b/src/Ryujinx.HLE/HOS/ArmProcessContext.cs
+@@ -1,6 +1,7 @@
+ using ARMeilleure.Memory;
+ using ARMeilleure.Translation.PTC;
+ using Ryujinx.Cpu;
++using Ryujinx.Cpu.Jit;
+ using Ryujinx.Graphics.Gpu;
+ using Ryujinx.HLE.HOS.Kernel.Process;
+ using Ryujinx.Memory;
+@@ -27,6 +28,8 @@ namespace Ryujinx.HLE.HOS
+ 
+         public ulong AddressSpaceSize { get; }
+ 
++        public ulong AddressSpaceBase { get; }
++
+         public ArmProcessContext(
+             ulong pid,
+             ICpuEngine cpuEngine,
+@@ -48,6 +51,9 @@ namespace Ryujinx.HLE.HOS
+             _memoryManager = memoryManager;
+ 
+             AddressSpaceSize = addressSpaceSize;
++            AddressSpaceBase = memoryManager is MemoryManagerHostNoMirror { IsIdentityMapped: true } identity
++                ? identity.WindowBase
++                : 0;
+         }
+ 
+         public IExecutionContext CreateExecutionContext(ExceptionCallbacks exceptionCallbacks)
+diff --git a/src/Ryujinx.HLE/HOS/Kernel/Memory/KPageTable.cs b/src/Ryujinx.HLE/HOS/Kernel/Memory/KPageTable.cs
+index 8985a4244..e244242c3 100644
+--- a/src/Ryujinx.HLE/HOS/Kernel/Memory/KPageTable.cs
++++ b/src/Ryujinx.HLE/HOS/Kernel/Memory/KPageTable.cs
+@@ -14,7 +14,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
+ 
+         protected override bool UsesPrivateAllocations => _cpuMemory.UsesPrivateAllocations;
+ 
+-        public KPageTable(KernelContext context, IVirtualMemoryManager cpuMemory, ulong reservedAddressSpaceSize) : base(context, reservedAddressSpaceSize)
++        public KPageTable(KernelContext context, IVirtualMemoryManager cpuMemory, ulong reservedAddressSpaceSize, ulong reservedAddressSpaceBase = 0) : base(context, reservedAddressSpaceSize, reservedAddressSpaceBase)
+         {
+             _cpuMemory = cpuMemory;
+         }
+diff --git a/src/Ryujinx.HLE/HOS/Kernel/Memory/KPageTableBase.cs b/src/Ryujinx.HLE/HOS/Kernel/Memory/KPageTableBase.cs
+index 8f56879ed..55b3bb3c8 100644
+--- a/src/Ryujinx.HLE/HOS/Kernel/Memory/KPageTableBase.cs
++++ b/src/Ryujinx.HLE/HOS/Kernel/Memory/KPageTableBase.cs
+@@ -1,4 +1,5 @@
+ using Ryujinx.Common;
++using Ryujinx.Common.Logging;
+ using Ryujinx.HLE.HOS.Kernel.Common;
+ using Ryujinx.HLE.HOS.Kernel.Process;
+ using Ryujinx.Horizon.Common;
+@@ -83,8 +84,22 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
+         private readonly MemoryFillValue _ipcFillValue;
+ 
+         private readonly ulong _reservedAddressSpaceSize;
++        private readonly ulong _reservedAddressSpaceBase;
+ 
+-        public KPageTableBase(KernelContext context, ulong reservedAddressSpaceSize)
++        /// <summary>
++        /// True when the process address space is identity mapped (guest VA == host pointer, NCE).
++        /// The whole 39-bit layout is then offset by <see cref="_reservedAddressSpaceBase"/>.
++        /// </summary>
++        public bool IsIdentityMapped => _reservedAddressSpaceBase != 0;
++
++        /// <param name="context">Kernel context</param>
++        /// <param name="reservedAddressSpaceSize">Size of the host reservation backing this address space</param>
++        /// <param name="reservedAddressSpaceBase">
++        /// Guest VA of the first byte of the host reservation. Zero for the classic layout
++        /// (guest VA 0 maps to the reservation base); non-zero for NCE identity mapping,
++        /// where the guest VA is the host pointer (Eden's <c>aslr_space_start</c>).
++        /// </param>
++        public KPageTableBase(KernelContext context, ulong reservedAddressSpaceSize, ulong reservedAddressSpaceBase = 0)
+         {
+             Context = context;
+ 
+@@ -96,6 +111,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
+             _ipcFillValue = MemoryFillValue.Zero;
+ 
+             _reservedAddressSpaceSize = reservedAddressSpaceSize;
++            _reservedAddressSpaceBase = reservedAddressSpaceBase;
+         }
+ 
+         public Result InitializeForProcess(
+@@ -177,6 +193,12 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
+             ulong stackAndTlsIoStart;
+             ulong stackAndTlsIoEnd;
+ 
++            // Upper bound for placing the alias/heap/stack/tlsio regions. Normally the end of
++            // the address space; the NCE identity window narrows it so every region the kernel
++            // can hand out is host-backed (0 = "use addrSpaceEnd", resolved after the switch).
++            ulong mapLimit = 0;
++            ulong identityWindowSize = 0;
++
+             AliasRegionExtraSize = 0;
+ 
+             switch (flags & ProcessCreationFlags.AddressSpaceMask)
+@@ -221,7 +243,54 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
+                     break;
+ 
+                 case ProcessCreationFlags.AddressSpace64Bit:
+-                    if (_reservedAddressSpaceSize < addrSpaceEnd)
++                    if (_reservedAddressSpaceBase != 0)
++                    {
++                        // NCE identity-mapped address space (Eden's aslr_space_start): the guest
++                        // VA *is* the host pointer, so the whole 39-bit layout is offset by the
++                        // base of the host reservation and confined to it. Everything the kernel
++                        // can hand to the guest (code, alias, heap, stack, TLS/IO) is therefore
++                        // host-backed and directly dereferenceable by natively executing code.
++                        //
++                        // The *address space* itself stays [0, 2^39) exactly like real hardware
++                        // (and Eden's m_address_space_start/end): rtld discovers the loaded NSOs
++                        // by walking QueryMemory from address 0 until the cursor wraps, and the
++                        // SDK's virtual-memory allocator does the same over the ASLR region. If
++                        // the space started at the window base, QueryMemory(0) would return the
++                        // "outside" descriptor whose end wraps to 0 and the walk would stop
++                        // before ever seeing a module ("[rtld] Unresolved symbol: nn::init::Start").
++                        // Only region *placement* is bounded to the window (mapLimit).
++                        ulong windowStart = _reservedAddressSpaceBase;
++                        ulong windowEnd = Math.Min(windowStart + _reservedAddressSpaceSize, addrSpaceEnd);
++                        ulong windowSize = windowEnd - windowStart;
++
++                        if (windowSize >= 0x4000000000UL)
++                        {
++                            // Full-size regions (same as the real 39-bit layout) fit in >= 256 GiB.
++                            aliasRegion.Size = 0x1000000000;
++                            heapRegion.Size = memConfig == MemoryConfiguration.MemoryConfiguration12GiB ? 0x300000000u : 0x180000000u;
++                            stackRegion.Size = 0x80000000;
++                            tlsIoRegion.Size = 0x1000000000;
++                        }
++                        else
++                        {
++                            int addressSpaceWidth = (int)ulong.Log2(windowSize);
++
++                            aliasRegion.Size = 1UL << (addressSpaceWidth - 3);
++                            heapRegion.Size = memConfig == MemoryConfiguration.MemoryConfiguration12GiB ? 0x300000000u : 0x180000000u;
++                            stackRegion.Size = 1UL << (addressSpaceWidth - 8);
++                            tlsIoRegion.Size = 1UL << (addressSpaceWidth - 3);
++                        }
++
++                        CodeRegionStart = BitUtils.AlignDown(address, RegionAlignment);
++                        codeRegionSize = BitUtils.AlignUp(endAddr, RegionAlignment) - CodeRegionStart;
++                        stackAndTlsIoStart = 0;
++                        stackAndTlsIoEnd = 0;
++                        AslrRegionStart = windowStart + 0x8000000;
++                        AslrRegionEnd = windowEnd;
++                        mapLimit = windowEnd;
++                        identityWindowSize = windowSize;
++                    }
++                    else if (_reservedAddressSpaceSize < addrSpaceEnd)
+                     {
+                         int addressSpaceWidth = (int)ulong.Log2(_reservedAddressSpaceSize);
+ 
+@@ -253,7 +322,12 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
+ 
+                     if (flags.HasFlag(ProcessCreationFlags.EnableAliasRegionExtraSize))
+                     {
+-                        AliasRegionExtraSize = addrSpaceEnd / 8;
++                        // Real kernel / Eden: 1/8 of the address space (64 GiB for 39-bit). A
++                        // shrunken identity window (< 256 GiB) cannot afford that, so scale it
++                        // with the window instead.
++                        AliasRegionExtraSize = identityWindowSize != 0 && identityWindowSize < 0x4000000000UL
++                            ? identityWindowSize / 8
++                            : (addrSpaceEnd - addrSpaceStart) / 8;
+                         aliasRegion.Size += AliasRegionExtraSize;
+                     }
+ 
+@@ -265,10 +339,15 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
+ 
+             CodeRegionEnd = CodeRegionStart + codeRegionSize;
+ 
++            if (mapLimit == 0)
++            {
++                mapLimit = addrSpaceEnd;
++            }
++
+             ulong mapBaseAddress;
+             ulong mapAvailableSize;
+ 
+-            if (CodeRegionStart - AslrRegionStart >= addrSpaceEnd - CodeRegionEnd)
++            if (CodeRegionStart - AslrRegionStart >= mapLimit - CodeRegionEnd)
+             {
+                 // Has more space before the start of the code region.
+                 mapBaseAddress = AslrRegionStart;
+@@ -278,7 +357,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
+             {
+                 // Has more space after the end of the code region.
+                 mapBaseAddress = CodeRegionEnd;
+-                mapAvailableSize = addrSpaceEnd - CodeRegionEnd;
++                mapAvailableSize = mapLimit - CodeRegionEnd;
+             }
+ 
+             ulong mapTotalSize = aliasRegion.Size + heapRegion.Size + stackRegion.Size + tlsIoRegion.Size;
+@@ -362,6 +441,18 @@ namespace Ryujinx.HLE.HOS.Kernel.Memory
+             TlsIoRegionStart = tlsIoRegion.Start;
+             TlsIoRegionEnd = tlsIoRegion.End;
+ 
++            if (IsIdentityMapped)
++            {
++                // Structured line for NCE smoke triage: every region must lie inside the
++                // identity window or natively executing guest code cannot touch it.
++                Logger.Info?.Print(LogClass.Kernel,
++                    $"NCE|LAYOUT as=[0x{addrSpaceStart:X},0x{addrSpaceEnd:X}) window=[0x{_reservedAddressSpaceBase:X},0x{mapLimit:X}) " +
++                    $"code=[0x{CodeRegionStart:X},0x{CodeRegionEnd:X}) " +
++                    $"aslr=[0x{AslrRegionStart:X},0x{AslrRegionEnd:X}) alias=[0x{AliasRegionStart:X},0x{AliasRegionEnd:X}) " +
++                    $"heap=[0x{HeapRegionStart:X},0x{HeapRegionEnd:X}) stack=[0x{StackRegionStart:X},0x{StackRegionEnd:X}) " +
++                    $"tlsio=[0x{TlsIoRegionStart:X},0x{TlsIoRegionEnd:X}) aslrEnabled={aslrEnabled}");
++            }
++
+             // TODO: Check kernel configuration via secure monitor call when implemented to set memory fill values.
+ 
+             _currentHeapAddr = HeapRegionStart;
+diff --git a/src/Ryujinx.HLE/HOS/Kernel/Process/IProcessContext.cs b/src/Ryujinx.HLE/HOS/Kernel/Process/IProcessContext.cs
+index ac36b781b..cdee45d43 100644
+--- a/src/Ryujinx.HLE/HOS/Kernel/Process/IProcessContext.cs
++++ b/src/Ryujinx.HLE/HOS/Kernel/Process/IProcessContext.cs
+@@ -10,6 +10,13 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
+ 
+         ulong AddressSpaceSize { get; }
+ 
++        /// <summary>
++        /// Guest VA of the first byte backed by the host reservation. Zero for the classic
++        /// layout; non-zero when the address space is identity mapped (NCE), in which case
++        /// the kernel offsets the whole process layout by this value.
++        /// </summary>
++        ulong AddressSpaceBase { get; }
++
+         IExecutionContext CreateExecutionContext(ExceptionCallbacks exceptionCallbacks);
+         void Execute(IExecutionContext context, ulong codeAddress);
+         void InvalidateCacheRegion(ulong address, ulong size);
+diff --git a/src/Ryujinx.HLE/HOS/Kernel/Process/KProcess.cs b/src/Ryujinx.HLE/HOS/Kernel/Process/KProcess.cs
+index 20c8b116c..bd2f0d94c 100644
+--- a/src/Ryujinx.HLE/HOS/Kernel/Process/KProcess.cs
++++ b/src/Ryujinx.HLE/HOS/Kernel/Process/KProcess.cs
+@@ -106,7 +106,8 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
+ 
+             AllowCodeMemoryForJit = allowCodeMemoryForJit;
+ 
+-            RandomEntropy = new ulong[KScheduler.CpuCoresCount];
++            // Horizon GetInfo(RandomEntropy) accepts subId 0..3 (4 words).
++            RandomEntropy = new ulong[Math.Max(4, KScheduler.CpuCoresCount)];
+             PinnedThreads = new KThread[KScheduler.CpuCoresCount];
+ 
+             // TODO: Remove once we no longer need to initialize it externally.
+@@ -518,9 +519,17 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
+             return result;
+         }
+ 
+-        private static void GenerateRandomEntropy()
++        private void GenerateRandomEntropy()
+         {
+-            // TODO.
++            // svcGetInfo(InfoType_RandomEntropy) — used by nnSdk ASLR for MapMemory /
++            // alias placement. Leaving these zeroed makes titles abort after exhausting
++            // placement retries (seen on Pokémon Violet under NCE).
++            Span<byte> bytes = stackalloc byte[8];
++            for (int i = 0; i < RandomEntropy.Length; i++)
++            {
++                Random.Shared.NextBytes(bytes);
++                RandomEntropy[i] = BitConverter.ToUInt64(bytes);
++            }
+         }
+ 
+         public Result Start(int mainThreadPriority, ulong stackSize)
+@@ -1089,7 +1098,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
+ 
+             Context = _contextFactory.Create(KernelContext, Pid, 1UL << addrSpaceBits, InvalidAccessHandler, for64Bit);
+ 
+-            MemoryManager = new KPageTable(KernelContext, CpuMemory, Context.AddressSpaceSize);
++            MemoryManager = new KPageTable(KernelContext, CpuMemory, Context.AddressSpaceSize, Context.AddressSpaceBase);
+         }
+ 
+         private static bool InvalidAccessHandler(ulong va)
+diff --git a/src/Ryujinx.HLE/HOS/Kernel/Process/ProcessContext.cs b/src/Ryujinx.HLE/HOS/Kernel/Process/ProcessContext.cs
+index b4ae6ec4e..d6491c776 100644
+--- a/src/Ryujinx.HLE/HOS/Kernel/Process/ProcessContext.cs
++++ b/src/Ryujinx.HLE/HOS/Kernel/Process/ProcessContext.cs
+@@ -10,6 +10,8 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
+ 
+         public ulong AddressSpaceSize { get; }
+ 
++        public ulong AddressSpaceBase => 0;
++
+         public ProcessContext(IVirtualMemoryManager asManager, ulong addressSpaceSize)
+         {
+             AddressSpace = asManager;
+-- 
+2.45.0
+

@@ -1,6 +1,9 @@
 package org.ryubing.android
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -12,6 +15,7 @@ import org.ryubing.android.data.AppLifecycleStore
 import org.ryubing.android.data.DataFolderResolver
 import org.ryubing.android.data.DriverRepository
 import org.ryubing.android.data.GamepadHotkeyRepository
+import org.ryubing.android.data.GameEntry
 import org.ryubing.android.data.GameRepository
 import org.ryubing.android.data.SettingsRepository
 import org.ryubing.android.emu.EmulationSession
@@ -20,6 +24,7 @@ import org.ryubing.android.input.DpadInputMode
 import org.ryubing.android.input.PhysicalGamepadController
 import org.ryubing.android.ui.RyubingApp
 import org.ryubing.android.ui.theme.RyubingTheme
+import java.io.File
 
 class MainActivity : ComponentActivity() {
 
@@ -38,6 +43,7 @@ class MainActivity : ComponentActivity() {
         val lifecycleStore = AppLifecycleStore(applicationContext)
         val systemDriverCrashed = lifecycleStore.consumeSystemDriverCrash()
         val initialGame = lifecycleStore.consumePendingLaunch()
+            ?: resolveLaunchGame(gameRepo, intent)
         settingsRepository = SettingsRepository(applicationContext)
         mappingRepository = ControllerMappingRepository(applicationContext)
         hotkeyRepository = GamepadHotkeyRepository(applicationContext)
@@ -111,5 +117,45 @@ class MainActivity : ComponentActivity() {
             }
         }
         return super.dispatchGenericMotionEvent(event)
+    }
+
+    companion object {
+        private const val TAG = "MainActivity"
+
+        /** adb: `am start -n … --es org.ryubing.android.LAUNCH_TITLE_ID 01008F6008C5E000` */
+        const val EXTRA_LAUNCH_TITLE_ID = "org.ryubing.android.LAUNCH_TITLE_ID"
+
+        /** adb: `am start -n … --es org.ryubing.android.LAUNCH_PATH /storage/.../game.nsp` */
+        const val EXTRA_LAUNCH_PATH = "org.ryubing.android.LAUNCH_PATH"
+
+        fun resolveLaunchGame(gameRepo: GameRepository, intent: Intent?): GameEntry? {
+            if (intent == null) return null
+
+            val path = intent.getStringExtra(EXTRA_LAUNCH_PATH)?.trim().orEmpty()
+            if (path.isNotEmpty()) {
+                val file = File(path)
+                if (!file.isFile) {
+                    Log.w(TAG, "LAUNCH_PATH missing or not a file: $path")
+                    return null
+                }
+                return GameEntry(
+                    title = file.nameWithoutExtension,
+                    uri = Uri.fromFile(file),
+                    sizeBytes = file.length(),
+                    fileName = file.name,
+                )
+            }
+
+            val titleId = intent.getStringExtra(EXTRA_LAUNCH_TITLE_ID)?.trim().orEmpty()
+            if (titleId.isNotEmpty()) {
+                val game = gameRepo.findByTitleId(titleId)
+                if (game == null) {
+                    Log.w(TAG, "LAUNCH_TITLE_ID not in library (add the dump once): $titleId")
+                }
+                return game
+            }
+
+            return null
+        }
     }
 }

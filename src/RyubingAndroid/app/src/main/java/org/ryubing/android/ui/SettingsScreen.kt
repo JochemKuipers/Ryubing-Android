@@ -285,6 +285,13 @@ private fun SystemSettingsPage(config: EmulatorConfig, update: (EmulatorConfig) 
         "Native Code Execution (NCE)",
         config.useNce,
     ) { update(config.copy(useNce = it)) }
+    DropdownRow(
+        label = "NCE debug log",
+        valueLabel = nceDebugLabel(config.nceDebugLevel),
+        options = NCE_DEBUG_OPTIONS,
+        selected = config.nceDebugLevel,
+        onSelect = { update(config.copy(nceDebugLevel = it)) },
+    )
     SwitchRow("Docked mode", config.dockedMode) { update(config.copy(dockedMode = it)) }
     SwitchRow("Enable PPTC", config.enablePptc) { update(config.copy(enablePptc = it)) }
     SwitchRow("Low-power PPTC", config.enableLowPowerPtc) {
@@ -655,6 +662,13 @@ private val MEMORY_MODE_OPTIONS = listOf(
     2 to "Host mapped (unsafe)",
 )
 
+private val NCE_DEBUG_OPTIONS = listOf(
+    0 to "Off",
+    1 to "Errors",
+    2 to "Standard",
+    3 to "Verbose",
+)
+
 private val TIMEZONE_OPTIONS = listOf(
     0 to "UTC",
     1 to "America/New_York",
@@ -719,6 +733,7 @@ private fun languageLabel(v: Int) = LANGUAGE_OPTIONS.firstOrNull { it.first == v
 private fun regionLabel(v: Int) = REGION_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
 private fun dramLabel(v: Int) = DRAM_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
 private fun memoryModeLabel(v: Int) = MEMORY_MODE_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
+private fun nceDebugLabel(v: Int) = NCE_DEBUG_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
 private fun vsyncLabel(v: Int) = VSYNC_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
 private fun aspectLabel(v: Int) = ASPECT_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()
 private fun aaLabel(v: Int) = AA_OPTIONS.firstOrNull { it.first == v }?.second ?: v.toString()

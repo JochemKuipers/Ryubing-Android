@@ -46,6 +46,18 @@ class GameRepository(val context: Context) {
 
     fun folderUris(): Set<String> = prefs.getStringSet(KEY_FOLDERS, emptySet()) ?: emptySet()
 
+    /**
+     * Library lookup for adb/smoke auto-launch (`LAUNCH_TITLE_ID` intent extra).
+     * Matches base application ID so update IDs (...800) still find the base dump.
+     */
+    fun findByTitleId(titleId: String): GameEntry? {
+        val want = ContentMetadataStore.toBaseTitleId(titleId).lowercase()
+        if (want.isBlank()) return null
+        return scanGames().firstOrNull {
+            ContentMetadataStore.toBaseTitleId(it.titleId).lowercase() == want
+        }
+    }
+
     fun scanGames(): List<GameEntry> = folderUris().flatMap { uriString ->
         val tree = DocumentFile.fromTreeUri(context, Uri.parse(uriString)) ?: return@flatMap emptyList()
         tree.listFiles()

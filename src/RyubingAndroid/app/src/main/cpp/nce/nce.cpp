@@ -10,14 +10,11 @@
 #include <android/log.h>
 
 #include "nce.h"
+#include "nce_internal.h"
+#include "nce_log.h"
 #include "core.h"
 #include "instructions.h"
 #include "patcher.h"
-
-#define LOG_TAG "RyubingNCE"
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
 namespace {
 
@@ -71,7 +68,18 @@ int32_t nce_get_abi_version(void) {
 }
 
 const char* nce_get_version_string(void) {
-    return "ryubing-nce 0.7.1 (phase 6: alignment interpreter)";
+    return "ryubing-nce 0.8.0 (identity-mapped AS: guest VA == host pointer; self-test)";
+}
+
+void nce_set_debug_level(int32_t level) {
+    if (level < 0) {
+        level = 0;
+    }
+    if (level > 3) {
+        level = 3;
+    }
+    g_nce_debug_level.store(level, std::memory_order_relaxed);
+    NCE_LOGI("nce_set_debug_level: %d", level);
 }
 
 int32_t nce_patch_module(
@@ -88,14 +96,14 @@ int32_t nce_patch_module(
         return -1;
     }
     if (code_offset + code_size > image_size) {
-        LOGE("patch_module: code segment [%llu..%llu) exceeds image size %llu",
+        NCE_LOGE("patch_module: code segment [%llu..%llu) exceeds image size %llu",
              (unsigned long long)code_offset,
              (unsigned long long)(code_offset + code_size),
              (unsigned long long)image_size);
         return -1;
     }
     if ((code_offset & 3) != 0 || (code_size & 3) != 0) {
-        LOGE("patch_module: code segment must be 4-byte aligned");
+        NCE_LOGE("patch_module: code segment must be 4-byte aligned");
         return -1;
     }
 
@@ -116,7 +124,7 @@ int32_t nce_patch_module(
 
     Patcher patcher{};
     if (!patcher.PatchText(image, code)) {
-        LOGE("patch_module: PatchText failed (module too far from patch section?)");
+        NCE_LOGE("patch_module: PatchText failed (module too far from patch section?)");
         return -2;
     }
 
@@ -143,7 +151,7 @@ int32_t nce_patch_module(
 
     EntryTrampolines trampolines;
     if (!patcher.RelocateAndCopy(base_virtual_addr, code, image, &trampolines)) {
-        LOGE("patch_module: RelocateAndCopy failed");
+        NCE_LOGE("patch_module: RelocateAndCopy failed");
         return -2;
     }
 
@@ -155,7 +163,7 @@ int32_t nce_patch_module(
 
     const uint64_t final_size = static_cast<uint64_t>(image.size());
     if (final_size > image_capacity) {
-        LOGE("patch_module: patched image (%llu) exceeds capacity (%llu)",
+        NCE_LOGE("patch_module: patched image (%llu) exceeds capacity (%llu)",
              (unsigned long long)final_size, (unsigned long long)image_capacity);
         *out_image_size = final_size;
         return -1;
@@ -178,7 +186,7 @@ int32_t nce_patch_module(
         case Ryubing::Nce::PatchMode::PreText:
             out_result->patch_offset = 0;
             out_result->patch_size = patcher.GetSectionSize();
-            LOGW("patch_module: PreText mode — text is shifted by 0x%llx bytes; "
+            NCE_LOGW("patch_module: PreText mode — text is shifted by 0x%llx bytes; "
                  "loaders must map the full patched image from the module base",
                  (unsigned long long)out_result->patch_size);
             break;
@@ -191,7 +199,7 @@ int32_t nce_patch_module(
             out_result->pre_patch_size = patcher.GetPreSectionSize();
             out_result->patch_offset = final_size - patcher.GetSectionSize();
             out_result->patch_size = patcher.GetSectionSize();
-            LOGW("patch_module: Split mode — pre=0x%llx post=0x%llx; "
+            NCE_LOGW("patch_module: Split mode — pre=0x%llx post=0x%llx; "
                  "verify branch reach and RX on both patch sections",
                  (unsigned long long)out_result->pre_patch_size,
                  (unsigned long long)out_result->patch_size);
@@ -202,12 +210,12 @@ int32_t nce_patch_module(
 
     // Growth sanity: reserved capacity should cover the final image.
     if (final_size > image_size + PatchGrowthEstimate(image_size)) {
-        LOGW("patch_module: final size %llu exceeded growth estimate %llu (still fits capacity)",
+        NCE_LOGW("patch_module: final size %llu exceeded growth estimate %llu (still fits capacity)",
              (unsigned long long)final_size,
              (unsigned long long)(image_size + PatchGrowthEstimate(image_size)));
     }
 
-    LOGI("patch_module: ok — image %llu -> %llu bytes, mode=%u, svc=%u, sysreg=%u, excl=%u",
+    NCE_LOGI("patch_module: ok — image %llu -> %llu bytes, mode=%u, svc=%u, sysreg=%u, excl=%u",
          (unsigned long long)image_size, (unsigned long long)final_size,
          out_result->patch_mode, out_result->patched_svc_count,
          out_result->patched_sysreg_count, out_result->converted_exclusive_count);
@@ -230,7 +238,7 @@ int32_t nce_thread_init(void) {
 int32_t nce_core_create(void) {
     auto core = std::make_unique<NceCore>();
     if (core->Initialize() != 0) {
-        LOGE("nce_core_create: Initialize failed");
+        NCE_LOGE("nce_core_create: Initialize failed");
         return -1;
     }
 
@@ -254,15 +262,29 @@ uint64_t nce_run_thread(int32_t core_handle, uint64_t trampoline_addr) {
     // Auto-lookup: when no trampoline is specified, check whether the
     // current guest PC has a registered re-entry point (i.e., we are
     // resuming right after an SVC). This matches eden's post-handler logic.
+    bool trampoline_hit = false;
     if (trampoline_addr == 0) {
         const uint64_t pc = core->GetGuestContext().pc;
         auto it = g_trampolines.find(pc);
         if (it != g_trampolines.end()) {
             trampoline_addr = it->second;
+            trampoline_hit = true;
         }
     }
 
-    return core->RunThread(trampoline_addr);
+    const auto& ctx = core->GetGuestContext();
+    NCE_LOG_STD("NCE|RUN native-enter pc=0x%llx sp=0x%llx trampoline=%s0x%llx map=%zu",
+                (unsigned long long)ctx.pc, (unsigned long long)ctx.sp,
+                trampoline_hit ? "hit/" : (trampoline_addr ? "explicit/" : "none/"),
+                (unsigned long long)trampoline_addr, g_trampolines.size());
+
+    const uint64_t hr = core->RunThread(trampoline_addr);
+
+    NCE_LOG_STD("NCE|RUN native-exit hr=0x%llx pc=0x%llx sp=0x%llx",
+                (unsigned long long)hr,
+                (unsigned long long)core->GetGuestContext().pc,
+                (unsigned long long)core->GetGuestContext().sp);
+    return hr;
 }
 
 void nce_signal_interrupt(int32_t core_handle) {
@@ -327,4 +349,16 @@ void nce_clear_trampolines(void) {
 }
 
 } // extern "C"
+
+namespace Ryubing::Nce::Internal {
+
+std::unordered_map<uint64_t, uint64_t> SnapshotTrampolines() {
+    return g_trampolines;
+}
+
+void RestoreTrampolines(std::unordered_map<uint64_t, uint64_t> trampolines) {
+    g_trampolines = std::move(trampolines);
+}
+
+} // namespace Ryubing::Nce::Internal
 

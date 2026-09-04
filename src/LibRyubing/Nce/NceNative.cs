@@ -15,13 +15,64 @@ namespace LibRyubing.Nce
         private const string Lib = "ryubing-nce";
 
         /// <summary>NCE ABI version this managed side expects (see nce.h).</summary>
-        internal const int ExpectedAbiVersion = 3;
+        internal const int ExpectedAbiVersion = 4;
 
         [DllImport(Lib, EntryPoint = "nce_get_abi_version")]
         internal static extern int GetAbiVersion();
 
         [DllImport(Lib, EntryPoint = "nce_get_version_string")]
         internal static extern byte* GetVersionString();
+
+        /// <summary>Native library version string, or "unavailable".</summary>
+        internal static string VersionString
+        {
+            get
+            {
+                try
+                {
+                    byte* p = GetVersionString();
+                    return p == null ? "unavailable" : Marshal.PtrToStringUTF8((IntPtr)p) ?? "unavailable";
+                }
+                catch (DllNotFoundException)
+                {
+                    return "unavailable";
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    return "unavailable";
+                }
+            }
+        }
+
+        [DllImport(Lib, EntryPoint = "nce_set_debug_level")]
+        internal static extern void SetDebugLevel(int level);
+
+        /// <summary>Cached managed copy of the native debug level (0–3).</summary>
+        internal static int DebugLevel { get; private set; }
+
+        /// <summary>
+        /// Applies NCE debug verbosity to both managed gating and the native library.
+        /// Safe to call before the .so is loaded (native call is best-effort).
+        /// </summary>
+        internal static void ApplyDebugLevel(int level)
+        {
+            DebugLevel = Math.Clamp(level, 0, 3);
+            try
+            {
+                SetDebugLevel(DebugLevel);
+            }
+            catch (DllNotFoundException)
+            {
+                // libryubing-nce not loaded yet; CheckAvailable / ctor will retry.
+            }
+            catch (EntryPointNotFoundException)
+            {
+            }
+        }
+
+        internal static bool LogErrors => DebugLevel >= 1;
+        internal static bool LogStandard => DebugLevel >= 2;
+        internal static bool LogVerbose => DebugLevel >= 3;
 
         // --- Halt reasons (must match HaltReason in guest_context.h) ---
 
@@ -167,8 +218,37 @@ namespace LibRyubing.Nce
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         internal delegate int PageFaultHandler(ulong guestVa, ulong size, int isWrite);
 
+        /// <summary>
+        /// Registers the identity window [windowBase, windowBase + windowSize) and the managed
+        /// page-fault handler. Guest VAs are host pointers, so the native side passes the
+        /// faulting address straight through.
+        /// </summary>
         [DllImport(Lib, EntryPoint = "nce_set_memory_config")]
-        internal static extern void SetMemoryConfig(ulong hostBase, ulong addressSpaceSize, IntPtr handler);
+        internal static extern void SetMemoryConfig(ulong windowBase, ulong windowSize, IntPtr handler);
+
+        // --- Self test (must match NceSelfTestResult in nce.h) ---
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct NceSelfTestResult
+        {
+            public uint StagesRun;
+            public uint StagesFailed;
+            public uint ObservedSvcNumber;
+            public uint Reserved0;
+            public ulong ObservedSvcX0;
+            public ulong ObservedStoreValue;
+            public ulong ObservedAlignmentValue;
+            public ulong ObservedHaltReason;
+            public ulong ObservedFaultPc;
+            public ulong ScratchAddress;
+        }
+
+        /// <summary>
+        /// Runs the native self-test using the top of the identity window as scratch.
+        /// Returns 0 on success; non-zero on failure (see <see cref="NceSelfTestResult.StagesFailed"/>).
+        /// </summary>
+        [DllImport(Lib, EntryPoint = "nce_self_test")]
+        internal static extern int SelfTest(ulong windowBase, ulong windowSize, ref NceSelfTestResult result);
 
         // --- Patch result struct (must match NcePatchResult in nce.h) ---
 

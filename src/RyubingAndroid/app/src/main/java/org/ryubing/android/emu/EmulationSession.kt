@@ -55,7 +55,7 @@ class EmulationSession(
     fun applyConfig(config: EmulatorConfig) {
         RyubingNative.core.apply {
             ryubing_set_memory_config(config.memoryConfiguration, config.memoryManagerMode)
-            ryubing_set_cpu_config(config.useNce.toInt())
+            ryubing_set_cpu_config(config.useNce.toInt(), config.nceDebugLevel)
             ryubing_set_system_config(
                 config.systemLanguage,
                 config.systemRegion,
