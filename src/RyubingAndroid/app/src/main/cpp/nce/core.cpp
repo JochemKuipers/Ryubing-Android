@@ -184,33 +184,21 @@ int NceCore::Initialize() {
     return 0;
 }
 
-void NceCore::SignalInterrupt(NativeExecutionParameters* thread_params) {
+void NceCore::SignalInterrupt() {
     m_guest_ctx.esr_el1.fetch_or(static_cast<u64>(HaltReason::BreakLoop));
 
-    nce_lock_thread_parameters(thread_params);
+    nce_lock_thread_parameters(&m_thread_params);
 
     std::atomic_thread_fence(std::memory_order_acquire);
 
-    if (thread_params->is_running) {
+    if (m_thread_params.is_running) {
         syscall(SYS_tkill, m_thread_id, BreakFromRunCodeSignal);
     } else {
-        nce_unlock_thread_parameters(thread_params);
+        nce_unlock_thread_parameters(&m_thread_params);
     }
 }
 
-void NceCore::LockThread(NativeExecutionParameters* thread_params) {
-    nce_lock_thread_parameters(thread_params);
-}
-
-void NceCore::UnlockThread(NativeExecutionParameters* thread_params) {
-    m_guest_ctx.tpidr_el0 = thread_params->tpidr_el0;
-    m_guest_ctx.tpidrro_el0 = thread_params->tpidrro_el0;
-    thread_params->native_context = nullptr;
-    nce_unlock_thread_parameters(thread_params);
-}
-
-
-uint64_t NceCore::RunThread(NativeExecutionParameters* thread_params, uint64_t trampoline_addr) {
+uint64_t NceCore::RunThread(uint64_t trampoline_addr) {
     // Check if we're already interrupted. If so, return immediately.
     uint64_t hr = m_guest_ctx.esr_el1.exchange(0);
     if (hr != 0) {
@@ -224,32 +212,32 @@ uint64_t NceCore::RunThread(NativeExecutionParameters* thread_params, uint64_t t
     // Critical section begins: publish the context to the thread params so
     // signal handlers can find it via TPIDR_EL0.
     m_guest_ctx.parent = this;
-    thread_params->native_context = &m_guest_ctx;
-    thread_params->tpidr_el0 = tpidr_el0_cache;
-    thread_params->tpidrro_el0 = tpidrro_el0_cache;
+    m_thread_params.native_context = &m_guest_ctx;
+    m_thread_params.tpidr_el0 = tpidr_el0_cache;
+    m_thread_params.tpidrro_el0 = tpidrro_el0_cache;
 
     // Memory barrier to ensure visibility of changes.
     std::atomic_thread_fence(std::memory_order_release);
-    thread_params->is_running = true;
+    m_thread_params.is_running = true;
     m_is_running.store(true, std::memory_order_relaxed);
 
     // Run the guest. Both paths "return" with X0 = halt reason when the
     // guest exits (SVC trampoline or break signal handler restores the host
     // context with the return address and halt reason in X0).
     if (trampoline_addr != 0) {
-        hr = nce_return_to_run_code_by_trampoline(thread_params, &m_guest_ctx, trampoline_addr);
+        hr = nce_return_to_run_code_by_trampoline(&m_thread_params, &m_guest_ctx, trampoline_addr);
     } else {
-        hr = nce_return_to_run_code_by_exception_level_change(m_thread_id, thread_params);
+        hr = nce_return_to_run_code_by_exception_level_change(m_thread_id, &m_thread_params);
     }
 
     // Critical section for thread cleanup.
     std::atomic_thread_fence(std::memory_order_acquire);
 
     // Cache values before releasing the thread.
-    const uint64_t final_tpidr_el0 = thread_params->tpidr_el0;
+    const uint64_t final_tpidr_el0 = m_thread_params.tpidr_el0;
 
-    thread_params->is_running = false;
-    thread_params->native_context = nullptr;
+    m_thread_params.is_running = false;
+    m_thread_params.native_context = nullptr;
     m_is_running.store(false, std::memory_order_relaxed);
 
     // Non-critical updates can happen after releasing the thread.

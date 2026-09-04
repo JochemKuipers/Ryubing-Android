@@ -32,20 +32,26 @@ std::mutex g_core_mutex;
 std::unordered_map<int32_t, std::unique_ptr<NceCore>> g_cores;
 int32_t g_next_core_handle = 1;
 
+// Trampoline registry: guest code address -> patch entry point, used by
+// nce_run_thread to re-enter the guest efficiently after an SVC. Populated
+// by nce_patch_module, cleared by nce_clear_trampolines. Only one guest
+// process runs at a time, so a single global map suffices.
+std::unordered_map<uint64_t, uint64_t> g_trampolines;
+
 NceCore* GetCore(int32_t handle) {
     std::lock_guard lock(g_core_mutex);
     auto it = g_cores.find(handle);
     return it != g_cores.end() ? it->second.get() : nullptr;
 }
 
-// The C ABI NceThreadParameters must be layout-compatible with the internal
-// NativeExecutionParameters (see asm_defs.h for the fixed offsets).
-static_assert(offsetof(NceThreadParameters, tpidr_el0) == 0x00);
-static_assert(offsetof(NceThreadParameters, tpidrro_el0) == 0x08);
-static_assert(offsetof(NceThreadParameters, native_context) == 0x10);
-static_assert(offsetof(NceThreadParameters, lock) == 0x18);
-static_assert(offsetof(NceThreadParameters, is_running) == 0x1C);
-static_assert(offsetof(NceThreadParameters, magic) == 0x20);
+// The internal NativeExecutionParameters must match the fixed layout in
+// asm_defs.h (the patcher's generated code reads these offsets).
+static_assert(offsetof(NativeExecutionParameters, tpidr_el0) == 0x00);
+static_assert(offsetof(NativeExecutionParameters, tpidrro_el0) == 0x08);
+static_assert(offsetof(NativeExecutionParameters, native_context) == 0x10);
+static_assert(offsetof(NativeExecutionParameters, lock) == 0x18);
+static_assert(offsetof(NativeExecutionParameters, is_running) == 0x1C);
+static_assert(offsetof(NativeExecutionParameters, magic) == 0x20);
 
 // Upper bound on patch-section growth per module (generous).
 constexpr uint64_t PatchGrowthEstimate(uint64_t image_size) {
@@ -64,7 +70,7 @@ int32_t nce_get_abi_version(void) {
 }
 
 const char* nce_get_version_string(void) {
-    return "ryubing-nce 0.3.0 (phase 2: signals + core)";
+    return "ryubing-nce 0.4.0 (phase 3: execution core)";
 }
 
 int32_t nce_patch_module(
@@ -117,6 +123,12 @@ int32_t nce_patch_module(
     if (!patcher.RelocateAndCopy(base_virtual_addr, code, image, &trampolines)) {
         LOGE("patch_module: RelocateAndCopy failed");
         return -2;
+    }
+
+    // Register the trampolines so nce_run_thread can find the re-entry
+    // point for each patched SVC site.
+    for (const auto& [guest_addr, patch_addr] : trampolines) {
+        g_trampolines[guest_addr] = patch_addr;
     }
 
     const uint64_t final_size = static_cast<uint64_t>(image.size());
@@ -217,26 +229,32 @@ void nce_core_destroy(int32_t core_handle) {
     g_cores.erase(core_handle);
 }
 
-uint64_t nce_run_thread(int32_t core_handle, NceThreadParameters* thread_params,
-                        uint64_t trampoline_addr) {
+uint64_t nce_run_thread(int32_t core_handle, uint64_t trampoline_addr) {
     NceCore* core = GetCore(core_handle);
-    if (core == nullptr || thread_params == nullptr) {
+    if (core == nullptr) {
         return static_cast<uint64_t>(Ryubing::Nce::HaltReason::BreakLoop);
     }
 
-    // The C ABI struct is layout-compatible with NativeExecutionParameters
-    // (verified by static_asserts above).
-    auto* params = reinterpret_cast<Ryubing::Nce::NativeExecutionParameters*>(thread_params);
-    return core->RunThread(params, trampoline_addr);
+    // Auto-lookup: when no trampoline is specified, check whether the
+    // current guest PC has a registered re-entry point (i.e., we are
+    // resuming right after an SVC). This matches eden's post-handler logic.
+    if (trampoline_addr == 0) {
+        const uint64_t pc = core->GetGuestContext().pc;
+        auto it = g_trampolines.find(pc);
+        if (it != g_trampolines.end()) {
+            trampoline_addr = it->second;
+        }
+    }
+
+    return core->RunThread(trampoline_addr);
 }
 
-void nce_signal_interrupt(int32_t core_handle, NceThreadParameters* thread_params) {
+void nce_signal_interrupt(int32_t core_handle) {
     NceCore* core = GetCore(core_handle);
-    if (core == nullptr || thread_params == nullptr) {
+    if (core == nullptr) {
         return;
     }
-    auto* params = reinterpret_cast<Ryubing::Nce::NativeExecutionParameters*>(thread_params);
-    core->SignalInterrupt(params);
+    core->SignalInterrupt();
 }
 
 void nce_get_context(int32_t core_handle, NceGuestContextView* out_view) {
@@ -271,6 +289,21 @@ void nce_set_context(int32_t core_handle, const NceGuestContextView* in_view) {
     ctx.fpsr = in_view->fpsr;
     ctx.tpidr_el0 = in_view->tpidr_el0;
     ctx.tpidrro_el0 = in_view->tpidrro_el0;
+}
+
+
+// --- SVC dispatch support (phase 3) ---
+
+uint32_t nce_get_svc_number(int32_t core_handle) {
+    NceCore* core = GetCore(core_handle);
+    if (core == nullptr) {
+        return 0;
+    }
+    return core->GetGuestContext().svc;
+}
+
+void nce_clear_trampolines(void) {
+    g_trampolines.clear();
 }
 
 } // extern "C"

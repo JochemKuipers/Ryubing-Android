@@ -68,7 +68,7 @@ int32_t nce_patch_module(
     NcePatchResult* out_result
 );
 
-// --- Signal handling and core management (phase 2) ---
+// --- Signal handling and core management (phase 2/3) ---
 
 // Guest register state snapshot, used to get/set the core's context from
 // managed code. Must not be accessed while the guest thread is running.
@@ -83,17 +83,9 @@ typedef struct NceGuestContextView {
     uint64_t tpidrro_el0;
 } NceGuestContextView;
 
-// Thread parameters placed at a known address; TPIDR_EL0 points here while
-// the guest runs. Layout is fixed by asm_defs.h — do not reorder.
-typedef struct NceThreadParameters {
-    uint64_t tpidr_el0;          // +0x00
-    uint64_t tpidrro_el0;        // +0x08
-    void* native_context;        // +0x10 (opaque, set by the native side)
-    volatile uint32_t lock;      // +0x18 (1=unlocked, 0=locked)
-    volatile uint32_t is_running; // +0x1C (bool)
-    uint32_t magic;              // +0x20 (guard value)
-    uint32_t _pad;               // +0x24 (padding to 8-byte alignment)
-} NceThreadParameters;
+// NOTE: thread parameters (the TPIDR_EL0 target while the guest runs) are
+// owned by the native core at a stable address — they must never live in
+// GC-managed memory. The C ABI therefore does not expose them.
 
 // Installs the NCE signal handlers (SIGUSR2, SIGURG, SIGBUS, SIGSEGV) using
 // the real libc sigaction (bypassing the ART signal chain on Android).
@@ -115,22 +107,32 @@ int32_t nce_core_create(void);
 void nce_core_destroy(int32_t core_handle);
 
 // Runs guest code on the core starting from the current guest context.
-// Blocks until the guest exits (SVC, interrupt, or fault). The thread
-// parameters must have been initialized by the caller (magic field set);
-// nce_run_thread fills in the rest.
-//   thread_params: NceThreadParameters owned by the caller (per thread).
-//   trampoline_addr: address of a post-SVC re-entry trampoline (0=default).
+// Blocks until the guest exits (SVC, interrupt, or fault).
+//   trampoline_addr: address of a post-SVC re-entry trampoline (0=auto:
+//   look up the trampoline for the current PC in the registry).
 // Returns the halt reason (bit flags; see HaltReason in guest_context.h).
-uint64_t nce_run_thread(int32_t core_handle, NceThreadParameters* thread_params,
-                        uint64_t trampoline_addr);
+uint64_t nce_run_thread(int32_t core_handle, uint64_t trampoline_addr);
 
 // Signals the running guest thread on this core to break out of the run
 // loop (SIGURG). Safe to call from another thread.
-void nce_signal_interrupt(int32_t core_handle, NceThreadParameters* thread_params);
+void nce_signal_interrupt(int32_t core_handle);
 
 // Gets/sets the core's guest register snapshot. Do not call while running.
 void nce_get_context(int32_t core_handle, NceGuestContextView* out_view);
 void nce_set_context(int32_t core_handle, const NceGuestContextView* in_view);
+
+// --- SVC dispatch support (phase 3) ---
+
+// Returns the SVC number recorded by the patcher's SVC trampoline (set in
+// GuestContext::svc before returning to host). Only meaningful when the
+// last halt reason included SupervisorCall.
+uint32_t nce_get_svc_number(int32_t core_handle);
+
+// Clears the trampoline registry (call when the guest process exits, before
+// loading a new one). Trampolines are registered by nce_patch_module and
+// used automatically by nce_run_thread to re-enter the guest efficiently
+// after an SVC.
+void nce_clear_trampolines(void);
 
 #ifdef __cplusplus
 } // extern "C"

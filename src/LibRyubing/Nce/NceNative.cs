@@ -53,35 +53,12 @@ namespace LibRyubing.Nce
             public void SetX(int index, ulong value) { fixed (ulong* p = X) { p[index] = value; } }
         }
 
-        // --- Thread parameters (must match NceThreadParameters in nce.h;
-        //     layout is fixed by asm_defs.h — do not reorder) ---
+        // --- Thread parameters are NOT exposed to managed code ---
+        // The native core owns them at a stable address (the guest's
+        // TPIDR_EL0 points there while running); a GC-movable managed copy
+        // would be unsafe. The C ABI only uses the core handle.
 
-        [StructLayout(LayoutKind.Sequential)]
-        internal struct NceThreadParameters
-        {
-            public ulong TpidrEl0;      // +0x00
-            public ulong TpidrroEl0;    // +0x08
-            public IntPtr NativeContext; // +0x10 (opaque, set by native side)
-            public uint Lock;           // +0x18 (1=unlocked, 0=locked)
-            public uint IsRunning;      // +0x1C
-            public uint Magic;          // +0x20 (guard value)
-            public uint Pad;            // +0x24
-
-            /// <summary>TLS magic value identifying valid parameters (asm_defs.h).</summary>
-            public const uint TlsMagicValue = 0x555a5559;
-
-            /// <summary>Initializes the parameters with the TLS magic set.</summary>
-            public static NceThreadParameters Create()
-            {
-                return new NceThreadParameters
-                {
-                    Lock = 1, // SpinLockUnlocked
-                    Magic = TlsMagicValue,
-                };
-            }
-        }
-
-        // --- Signal handling and core management (phase 2) ---
+        // --- Signal handling and core management (phase 2/3) ---
 
         [DllImport(Lib, EntryPoint = "nce_initialize")]
         internal static extern int Initialize();
@@ -96,31 +73,22 @@ namespace LibRyubing.Nce
         internal static extern void CoreDestroy(int coreHandle);
 
         [DllImport(Lib, EntryPoint = "nce_run_thread")]
-        internal static extern ulong RunThread(int coreHandle, ref NceThreadParameters threadParams,
-            ulong trampolineAddr);
+        internal static extern ulong RunThread(int coreHandle, ulong trampolineAddr);
 
         [DllImport(Lib, EntryPoint = "nce_signal_interrupt")]
-        internal static extern void SignalInterrupt(int coreHandle, ref NceThreadParameters threadParams);
+        internal static extern void SignalInterrupt(int coreHandle);
 
         [DllImport(Lib, EntryPoint = "nce_get_context")]
-        private static extern void GetContextNative(int coreHandle, ref NceGuestContextView view);
+        internal static extern void GetContext(int coreHandle, ref NceGuestContextView view);
 
         [DllImport(Lib, EntryPoint = "nce_set_context")]
-        private static extern void SetContextNative(int coreHandle, ref NceGuestContextView view);
+        internal static extern void SetContext(int coreHandle, ref NceGuestContextView view);
 
-        /// <summary>Gets a copy of the core's guest register snapshot.</summary>
-        internal static NceGuestContextView? GetContext(int coreHandle)
-        {
-            NceGuestContextView view = default;
-            GetContextNative(coreHandle, ref view);
-            return view;
-        }
+        [DllImport(Lib, EntryPoint = "nce_get_svc_number")]
+        internal static extern uint GetSvcNumber(int coreHandle);
 
-        /// <summary>Sets the core's guest register snapshot (thread must not be running).</summary>
-        internal static void SetContext(int coreHandle, NceGuestContextView view)
-        {
-            SetContextNative(coreHandle, ref view);
-        }
+        [DllImport(Lib, EntryPoint = "nce_clear_trampolines")]
+        internal static extern void ClearTrampolines();
 
         // --- Patch result struct (must match NcePatchResult in nce.h) ---
 

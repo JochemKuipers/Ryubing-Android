@@ -5,78 +5,113 @@ using Ryujinx.Cpu;
 namespace LibRyubing.Nce
 {
     /// <summary>
-    /// NCE execution context: holds the guest register state for one thread.
+    /// NCE execution context: holds the guest register state for one thread
+    /// and owns the native NCE core (lazily created on first Execute).
     ///
-    /// Phase 0 stub: the register accessors are backed by a plain managed
-    /// array so the shape is right; later phases swap this for a view over
-    /// the native NceGuestContext (a pinned buffer shared with the native
-    /// signal handlers — the managed side must never touch it while the
-    /// guest thread is running, which the ICpuContext.Execute contract
-    /// already guarantees).
+    /// Register accessors operate on a cached snapshot that is synced
+    /// to/from the native GuestContext at Execute-loop boundaries (only
+    /// safe while the guest is stopped, which the ICpuContext.Execute
+    /// contract guarantees). Vector registers are managed-side storage
+    /// until the native view struct grows a VPR field.
     /// </summary>
     internal sealed class NceExecutionContext : IExecutionContext
     {
-        private readonly ulong[] _x = new ulong[32];
+        // Cached native context view (synced at loop boundaries).
+        private NceNative.NceGuestContextView _view;
         private readonly V128[] _v = new V128[32];
 
-        private ulong _pc;
-        private long _tpidrEl0;
-        private long _tpidrroEl0;
-        private uint _pstate;
-        private uint _fpcr;
-        private uint _fpsr;
-        private bool _running;
+        // Native core handle; created lazily inside Execute() so that
+        // gettid()/sigaltstack() bind to the thread that runs the guest.
+        private int _coreHandle = -1;
+
+        private volatile bool _running;
 
         internal ExceptionCallbacks Callbacks { get; }
         internal volatile bool StopRequested;
+        internal int CoreHandle => _coreHandle;
 
         public NceExecutionContext(ExceptionCallbacks callbacks)
         {
             Callbacks = callbacks;
         }
 
+        /// <summary>
+        /// Creates the native core from the calling thread. Must be called
+        /// from the thread that will run guest code (the Execute loop does
+        /// this on first entry).
+        /// </summary>
+        internal void EnsureCoreCreated()
+        {
+            if (_coreHandle < 0)
+            {
+                NceNative.Initialize();
+                NceNative.ThreadInit();
+                _coreHandle = NceNative.CoreCreate();
+            }
+        }
+
+        /// <summary>Pulls the register snapshot from the native GuestContext.</summary>
+        internal void PullFromNative()
+        {
+            if (_coreHandle >= 0)
+            {
+                NceNative.GetContext(_coreHandle, ref _view);
+            }
+        }
+
+        /// <summary>Pushes the register snapshot to the native GuestContext.</summary>
+        internal void PushToNative()
+        {
+            if (_coreHandle >= 0)
+            {
+                NceNative.SetContext(_coreHandle, ref _view);
+            }
+        }
+
+        // --- IExecutionContext ---
+
         /// <inheritdoc/>
-        public ulong Pc => _pc;
+        public ulong Pc => _view.Pc;
 
         /// <inheritdoc/>
         public long TpidrEl0
         {
-            get => _tpidrEl0;
-            set => _tpidrEl0 = value;
+            get => (long)_view.TpidrEl0;
+            set => _view.TpidrEl0 = (ulong)value;
         }
 
         /// <inheritdoc/>
         public long TpidrroEl0
         {
-            get => _tpidrroEl0;
-            set => _tpidrroEl0 = value;
+            get => (long)_view.TpidrroEl0;
+            set => _view.TpidrroEl0 = (ulong)value;
         }
 
         /// <inheritdoc/>
         public uint Pstate
         {
-            get => _pstate;
-            set => _pstate = value;
+            get => _view.Pstate;
+            set => _view.Pstate = value;
         }
 
         /// <inheritdoc/>
         public uint Fpcr
         {
-            get => _fpcr;
-            set => _fpcr = value;
+            get => _view.Fpcr;
+            set => _view.Fpcr = value;
         }
 
         /// <inheritdoc/>
         public uint Fpsr
         {
-            get => _fpsr;
-            set => _fpsr = value;
+            get => _view.Fpsr;
+            set => _view.Fpsr = value;
         }
 
         /// <inheritdoc/>
         public bool IsAarch32
         {
-            get => false; // NCE is AArch64-only; a 32-bit title never gets an NCE context
+            get => false; // NCE is AArch64-only
             set => throw new NotSupportedException("NCE does not support AArch32");
         }
 
@@ -89,13 +124,13 @@ namespace LibRyubing.Nce
         /// <inheritdoc/>
         public ulong GetX(int index)
         {
-            return _x[index];
+            return _view.GetX(index);
         }
 
         /// <inheritdoc/>
         public void SetX(int index, ulong value)
         {
-            _x[index] = value;
+            _view.SetX(index, value);
         }
 
         /// <inheritdoc/>
@@ -113,53 +148,56 @@ namespace LibRyubing.Nce
         /// <inheritdoc/>
         public void RequestInterrupt()
         {
-            // Phase 3: signals the running guest thread via SIGURG
-            // (esr_el1 |= BreakLoop, then tkill). The guest exits to the
-            // managed scheduler, which invokes Callbacks.InterruptCallback.
-            Callbacks.InterruptCallback?.Invoke(this);
+            // Signal the native core to break out of the guest (SIGURG).
+            // The Execute loop sees BreakLoop and invokes InterruptCallback.
+            if (_coreHandle >= 0)
+            {
+                NceNative.SignalInterrupt(_coreHandle);
+            }
         }
 
         /// <inheritdoc/>
         public void StopRunning()
         {
-            // Phase 3: same as RequestInterrupt but with a "don't resume" flag;
-            // the native run loop returns and Execute() unwinds.
             StopRequested = true;
-            _running = false;
+            if (_coreHandle >= 0)
+            {
+                NceNative.SignalInterrupt(_coreHandle);
+            }
         }
 
         /// <inheritdoc/>
         public void RequestDebugStep()
         {
-            // NCE runs guest code natively; single-stepping requires decoding
-            // and re-executing one instruction through the interpreter
-            // fallback. Deferred to a later phase (see plan, phase 6).
             throw new NotSupportedException("NCE single-stepping is not implemented yet");
         }
 
         /// <inheritdoc/>
         public ulong DebugPc
         {
-            get => _pc;
-            set => _pc = value;
+            get => _view.Pc;
+            set => _view.Pc = value;
         }
 
-        /// <summary>Marks the context as inside the native run loop (phase 3).</summary>
-        internal void SetRunning(bool running)
-        {
-            _running = running;
-        }
+        // --- Internal helpers for the Execute loop ---
 
-        /// <summary>Sets the PC directly; used by Execute before entering the run loop.</summary>
-        internal void SetPc(ulong pc)
-        {
-            _pc = pc;
-        }
+        /// <summary>Sets the entry PC before entering the run loop.</summary>
+        internal void SetPc(ulong pc) => _view.Pc = pc;
+
+        /// <summary>Sets the entry SP before entering the run loop.</summary>
+        internal void SetSp(ulong sp) => _view.Sp = sp;
+
+        /// <summary>Marks the context as inside the native run loop.</summary>
+        internal void SetRunning(bool running) => _running = running;
 
         public void Dispose()
         {
-            // Nothing to dispose in the stub; native thread parameters are
-            // released by the CPU context (phase 3).
+            if (_coreHandle >= 0)
+            {
+                NceNative.CoreDestroy(_coreHandle);
+                _coreHandle = -1;
+            }
         }
     }
 }
+

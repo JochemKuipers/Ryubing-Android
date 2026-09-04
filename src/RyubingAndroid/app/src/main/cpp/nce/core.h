@@ -40,8 +40,12 @@ void nce_lock_thread_parameters(void* tpidr);
 void nce_unlock_thread_parameters(void* tpidr);
 }
 
-// Per-core execution state. One instance per emulated CPU core; the C# side
-// drives it via the C ABI in nce.h.
+// Per-core execution state. One instance per emulated guest thread; the C#
+// side drives it via the C ABI in nce.h.
+//
+// The core OWNS its NativeExecutionParameters (stable native address — the
+// guest's TPIDR_EL0 points here while running, so it must never move, which
+// rules out keeping it in GC-managed memory).
 class NceCore {
 public:
     NceCore();
@@ -54,17 +58,16 @@ public:
     // Returns the halt reason (see HaltReason in guest_context.h).
     // trampoline_addr: address of a post-SVC re-entry trampoline to use
     // instead of the exception-level-change path (0 = use default).
-    uint64_t RunThread(NativeExecutionParameters* thread_params, uint64_t trampoline_addr);
+    uint64_t RunThread(uint64_t trampoline_addr);
 
     // Signals the running guest thread to break out of the run loop.
-    void SignalInterrupt(NativeExecutionParameters* thread_params);
-
-    // Locks/unlocks the thread's context (used by the scheduler).
-    void LockThread(NativeExecutionParameters* thread_params);
-    void UnlockThread(NativeExecutionParameters* thread_params);
+    // Safe to call from another thread.
+    void SignalInterrupt();
 
     GuestContext& GetGuestContext() { return m_guest_ctx; }
     const GuestContext& GetGuestContext() const { return m_guest_ctx; }
+
+    NativeExecutionParameters& GetThreadParams() { return m_thread_params; }
 
     bool IsRunning() const { return m_is_running.load(std::memory_order_relaxed); }
     int ThreadId() const { return m_thread_id; }
@@ -72,12 +75,9 @@ public:
 private:
     int m_thread_id{-1};
     GuestContext m_guest_ctx{};
+    NativeExecutionParameters m_thread_params{}; // Owned: TPIDR_EL0 target
     std::unique_ptr<uint8_t[]> m_signal_stack{};
     std::atomic<bool> m_is_running{false};
-
-    // Set by RunThread; the signal handlers and C++ fault handlers read it
-    // through GuestContext::parent.
-    NativeExecutionParameters* m_running_params{nullptr};
 };
 
 } // namespace Ryubing::Nce
