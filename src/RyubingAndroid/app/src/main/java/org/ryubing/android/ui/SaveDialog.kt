@@ -3,15 +3,19 @@ package org.ryubing.android.ui
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,6 +33,8 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.ryubing.android.data.ExtractedSaveArchive
+import org.ryubing.android.data.SaveArchiveKind
 import org.ryubing.android.data.SaveInfo
 import org.ryubing.android.data.SaveStore
 import org.ryubing.android.emu.EmulationSession
@@ -39,6 +45,7 @@ fun SaveDialog(
     gameTitle: String,
     appDataPath: String,
     session: EmulationSession,
+    titleNamesById: Map<String, String> = emptyMap(),
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -48,18 +55,45 @@ fun SaveDialog(
     var save by remember { mutableStateOf<SaveInfo?>(null) }
     var busy by remember { mutableStateOf(true) }
     var confirmClear by remember { mutableStateOf(false) }
+    var pendingEden by remember { mutableStateOf<ExtractedSaveArchive?>(null) }
+    var selectedEdenTitleId by remember { mutableStateOf<String?>(null) }
 
     fun fail(error: Throwable) {
         busy = false
         Toast.makeText(context, error.message ?: "Save operation failed", Toast.LENGTH_LONG).show()
     }
 
+    fun refreshSave(id: String?) {
+        saveId = id
+        save = store.find(id)
+    }
+
     LaunchedEffect(titleId) {
         runCatching {
-            saveId = withContext(Dispatchers.IO) { session.findUserSaveId(titleId) }
-            save = withContext(Dispatchers.IO) { store.find(saveId) }
+            val id = withContext(Dispatchers.IO) { session.ensureUserSaveId(titleId) }
+            withContext(Dispatchers.IO) { refreshSave(id) }
         }.onFailure(::fail)
         busy = false
+    }
+
+    fun finishRestore(extracted: ExtractedSaveArchive, edenTitleId: String?) {
+        busy = true
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val id = session.ensureUserSaveId(titleId)
+                        ?: error("Could not create a save slot for this game")
+                    store.restoreExtracted(extracted, id, edenTitleId)
+                }
+            }.onSuccess { restored ->
+                refreshSave(restored.directory.name)
+                busy = false
+                Toast.makeText(context, "Save restored", Toast.LENGTH_SHORT).show()
+            }.onFailure { error ->
+                store.discard(extracted)
+                fail(error)
+            }
+        }
     }
 
     val backupPicker = rememberLauncherForActivityResult(
@@ -88,13 +122,36 @@ fun SaveDialog(
             runCatching {
                 withContext(Dispatchers.IO) {
                     val input = context.contentResolver.openInputStream(uri) ?: error("Cannot open backup")
-                    input.use { store.restore(it, saveId) }
+                    input.use { store.extractAndInspect(it) }
                 }
-            }.onSuccess { restored ->
-                saveId = restored.directory.name
-                save = restored
-                busy = false
-                Toast.makeText(context, "Save restored", Toast.LENGTH_SHORT).show()
+            }.onSuccess { extracted ->
+                when (val kind = extracted.kind) {
+                    is SaveArchiveKind.Ryubing -> finishRestore(extracted, null)
+                    is SaveArchiveKind.Eden -> {
+                        val match = kind.titleIds.firstOrNull { it.equals(titleId, ignoreCase = true) }
+                        when {
+                            kind.titleIds.size == 1 -> finishRestore(extracted, kind.titleIds.single())
+                            match != null && kind.titleIds.size > 1 -> {
+                                selectedEdenTitleId = match
+                                pendingEden = extracted
+                                busy = false
+                            }
+                            kind.titleIds.size > 1 -> {
+                                selectedEdenTitleId = kind.titleIds.first()
+                                pendingEden = extracted
+                                busy = false
+                            }
+                            else -> {
+                                store.discard(extracted)
+                                fail(IllegalStateException("This backup belongs to a different game"))
+                            }
+                        }
+                    }
+                    SaveArchiveKind.Unknown -> {
+                        store.discard(extracted)
+                        fail(IllegalStateException("Unrecognized save archive"))
+                    }
+                }
             }.onFailure(::fail)
         }
     }
@@ -109,7 +166,7 @@ fun SaveDialog(
                         CircularProgressIndicator(Modifier.padding(end = 12.dp))
                         Text("Working…")
                     }
-                    save == null -> Text("No saves for this game yet. Play once to create one before restoring a backup.")
+                    save == null -> Text("Could not create a save slot for this game yet.")
                     else -> {
                         Text("Account save", style = MaterialTheme.typography.titleSmall)
                         Text(
@@ -141,6 +198,66 @@ fun SaveDialog(
         confirmButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Done") } },
     )
 
+    pendingEden?.let { extracted ->
+        val kind = extracted.kind as? SaveArchiveKind.Eden ?: return@let
+        AlertDialog(
+            onDismissRequest = {
+                if (!busy) {
+                    store.discard(extracted)
+                    pendingEden = null
+                }
+            },
+            title = { Text("Select game save") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        "This Eden export contains multiple games. Choose which save to restore into $gameTitle.",
+                        Modifier.padding(bottom = 8.dp),
+                    )
+                    kind.titleIds.forEach { id ->
+                        val label = titleNamesById.entries
+                            .firstOrNull { it.key.equals(id, ignoreCase = true) }
+                            ?.value
+                            ?.let { "$it ($id)" }
+                            ?: id
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedEdenTitleId = id }
+                                .padding(vertical = 4.dp),
+                        ) {
+                            RadioButton(
+                                selected = selectedEdenTitleId.equals(id, ignoreCase = true),
+                                onClick = { selectedEdenTitleId = id },
+                            )
+                            Text(label, Modifier.padding(start = 4.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy && selectedEdenTitleId != null,
+                    onClick = {
+                        val chosen = selectedEdenTitleId ?: return@TextButton
+                        pendingEden = null
+                        finishRestore(extracted, chosen)
+                    },
+                ) { Text("Restore") }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !busy,
+                    onClick = {
+                        store.discard(extracted)
+                        pendingEden = null
+                    },
+                ) { Text("Cancel") }
+            },
+        )
+    }
+
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
@@ -155,7 +272,7 @@ fun SaveDialog(
                         scope.launch {
                             runCatching { withContext(Dispatchers.IO) { store.clear(current) } }
                                 .onSuccess {
-                                    save = store.find(saveId)
+                                    refreshSave(saveId)
                                     busy = false
                                     Toast.makeText(context, "Save cleared", Toast.LENGTH_SHORT).show()
                                 }
