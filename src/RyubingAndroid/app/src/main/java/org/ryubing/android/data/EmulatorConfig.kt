@@ -17,6 +17,8 @@ package org.ryubing.android.data
 data class EmulatorConfig(
     val memoryConfiguration: Int = 0,   // 4 GiB
     val memoryManagerMode: Int = 2,     // HostMappedUnsafe
+    /** Prefer NCE (Native Code Execution) on ARM64 + HostMapped. Default off. */
+    val useNce: Boolean = false,
     val systemLanguage: Int = 1,        // AmericanEnglish
     val systemRegion: Int = 1,          // USA
     val dockedMode: Boolean = false,

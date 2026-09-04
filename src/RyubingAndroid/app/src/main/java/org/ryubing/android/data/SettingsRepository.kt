@@ -15,6 +15,7 @@ class SettingsRepository(private val context: Context) {
     fun load(): EmulatorConfig = EmulatorConfig(
         memoryConfiguration = prefs.getInt(KEY_MEM_CONFIG, defaultMemoryConfiguration()),
         memoryManagerMode = prefs.getInt(KEY_MEM_MODE, 2),
+        useNce = prefs.getBoolean(KEY_USE_NCE, false),
         systemLanguage = prefs.getInt(KEY_LANGUAGE, 1),
         systemRegion = prefs.getInt(KEY_REGION, 1),
         dockedMode = prefs.getBoolean(KEY_DOCKED, false),
@@ -64,6 +65,7 @@ class SettingsRepository(private val context: Context) {
     fun save(config: EmulatorConfig) = prefs.edit(commit = true) {
         putInt(KEY_MEM_CONFIG, config.memoryConfiguration)
         putInt(KEY_MEM_MODE, config.memoryManagerMode)
+        putBoolean(KEY_USE_NCE, config.useNce)
         putInt(KEY_LANGUAGE, config.systemLanguage)
         putInt(KEY_REGION, config.systemRegion)
         putBoolean(KEY_DOCKED, config.dockedMode)
@@ -123,6 +125,7 @@ class SettingsRepository(private val context: Context) {
     private companion object {
         const val KEY_MEM_CONFIG = "mem_config"
         const val KEY_MEM_MODE = "mem_mode"
+        const val KEY_USE_NCE = "use_nce"
         const val KEY_LANGUAGE = "language"
         const val KEY_REGION = "region"
         const val KEY_DOCKED = "docked"

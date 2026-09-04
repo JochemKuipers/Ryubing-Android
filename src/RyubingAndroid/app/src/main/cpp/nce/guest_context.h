@@ -17,7 +17,19 @@
 
 #include "asm_defs.h"
 
+#if defined(__aarch64__)
+#include <ucontext.h>
+#if defined(__linux__) || defined(__ANDROID__)
+#include <asm/sigcontext.h>
+#endif
+#endif
+
 namespace Ryubing::Nce {
+
+#if defined(__aarch64__)
+// Exposed for the alignment-fault interpreter (signal path).
+fpsimd_context* GetFloatingPointState(mcontext_t& host_ctx);
+#endif
 
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;

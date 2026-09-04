@@ -281,6 +281,10 @@ private fun SystemSettingsPage(config: EmulatorConfig, update: (EmulatorConfig) 
         selected = config.memoryManagerMode,
         onSelect = { update(config.copy(memoryManagerMode = it)) },
     )
+    SwitchRow(
+        "Native Code Execution (NCE)",
+        config.useNce,
+    ) { update(config.copy(useNce = it)) }
     SwitchRow("Docked mode", config.dockedMode) { update(config.copy(dockedMode = it)) }
     SwitchRow("Enable PPTC", config.enablePptc) { update(config.copy(enablePptc = it)) }
     SwitchRow("Low-power PPTC", config.enableLowPowerPtc) {

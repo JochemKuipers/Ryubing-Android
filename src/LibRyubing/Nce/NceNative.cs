@@ -15,7 +15,7 @@ namespace LibRyubing.Nce
         private const string Lib = "ryubing-nce";
 
         /// <summary>NCE ABI version this managed side expects (see nce.h).</summary>
-        internal const int ExpectedAbiVersion = 1;
+        internal const int ExpectedAbiVersion = 3;
 
         [DllImport(Lib, EntryPoint = "nce_get_abi_version")]
         internal static extern int GetAbiVersion();
@@ -45,12 +45,81 @@ namespace LibRyubing.Nce
             public uint Fpsr;
             public ulong TpidrEl0;
             public ulong TpidrroEl0;
+            // V0-V31 as (e0, e1) ulong pairs — matches ARMeilleure.State.V128 layout.
+            public fixed ulong V[64];
 
-            /// <summary>Reads general-purpose register X[index] (0-30).</summary>
-            public ulong GetX(int index) { fixed (ulong* p = X) { return p[index]; } }
+            /// <summary>
+            /// Reads general-purpose register X[index] (0-30), or SP when index is 31
+            /// (matches <see cref="Ryujinx.Cpu.IExecutionContext"/>).
+            /// </summary>
+            public ulong GetX(int index)
+            {
+                if ((uint)index > 31)
+                {
+                    throw new System.ArgumentOutOfRangeException(nameof(index));
+                }
 
-            /// <summary>Writes general-purpose register X[index] (0-30).</summary>
-            public void SetX(int index, ulong value) { fixed (ulong* p = X) { p[index] = value; } }
+                if (index == 31)
+                {
+                    return Sp;
+                }
+
+                fixed (ulong* p = X)
+                {
+                    return p[index];
+                }
+            }
+
+            /// <summary>
+            /// Writes general-purpose register X[index] (0-30), or SP when index is 31.
+            /// </summary>
+            public void SetX(int index, ulong value)
+            {
+                if ((uint)index > 31)
+                {
+                    throw new System.ArgumentOutOfRangeException(nameof(index));
+                }
+
+                if (index == 31)
+                {
+                    Sp = value;
+                    return;
+                }
+
+                fixed (ulong* p = X)
+                {
+                    p[index] = value;
+                }
+            }
+
+            /// <summary>Reads FP/SIMD register V[index] (0-31).</summary>
+            public ARMeilleure.State.V128 GetV(int index)
+            {
+                if ((uint)index > 31)
+                {
+                    throw new System.ArgumentOutOfRangeException(nameof(index));
+                }
+
+                fixed (ulong* p = V)
+                {
+                    return new ARMeilleure.State.V128(p[index * 2], p[index * 2 + 1]);
+                }
+            }
+
+            /// <summary>Writes FP/SIMD register V[index] (0-31).</summary>
+            public void SetV(int index, ARMeilleure.State.V128 value)
+            {
+                if ((uint)index > 31)
+                {
+                    throw new System.ArgumentOutOfRangeException(nameof(index));
+                }
+
+                fixed (ulong* p = V)
+                {
+                    p[index * 2] = value.Extract<ulong>(0);
+                    p[index * 2 + 1] = value.Extract<ulong>(1);
+                }
+            }
         }
 
         // --- Thread parameters are NOT exposed to managed code ---
@@ -89,6 +158,17 @@ namespace LibRyubing.Nce
 
         [DllImport(Lib, EntryPoint = "nce_clear_trampolines")]
         internal static extern void ClearTrampolines();
+
+        // --- Guest memory / page-fault integration (phase 5) ---
+
+        /// <summary>
+        /// Native page-fault callback: return 1 if handled (resume guest), 0 otherwise.
+        /// </summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate int PageFaultHandler(ulong guestVa, ulong size, int isWrite);
+
+        [DllImport(Lib, EntryPoint = "nce_set_memory_config")]
+        internal static extern void SetMemoryConfig(ulong hostBase, ulong addressSpaceSize, IntPtr handler);
 
         // --- Patch result struct (must match NcePatchResult in nce.h) ---
 
@@ -142,43 +222,60 @@ namespace LibRyubing.Nce
 
             ulong imageSize = (ulong)programImage.Length;
 
-            fixed (NcePatchResult* pResult = &result)
+            // Pass 1: query the required capacity.
+            if (!TryQueryPatchCapacity(imageSize, codeOffset, codeSize, out ulong requiredSize))
             {
-                // Pass 1: query the required capacity.
-                ulong requiredSize = 0;
-                int rc = PatchModuleNative(null, 0, imageSize, codeOffset, codeSize,
-                    baseVirtualAddr, &requiredSize, pResult);
-                if (rc != 0)
-                {
-                    return null;
-                }
-
-                // Allocate a buffer with the required capacity and copy the image in.
-                // The native side writes the patched image back into this buffer.
-                byte[] buffer = new byte[requiredSize];
-                System.Array.Copy(programImage, buffer, programImage.Length);
-
-                // Pass 2: patch.
-                ulong finalSize = 0;
-                fixed (byte* pBuffer = buffer)
-                {
-                    rc = PatchModuleNative(pBuffer, requiredSize, imageSize, codeOffset,
-                        codeSize, baseVirtualAddr, &finalSize, pResult);
-                }
-
-                if (rc != 0 || result.Success == 0)
-                {
-                    return null;
-                }
-
-                // Trim to the actual patched size.
-                if (finalSize < (ulong)buffer.LongLength)
-                {
-                    System.Array.Resize(ref buffer, (int)finalSize);
-                }
-
-                return buffer;
+                return null;
             }
+
+            // Allocate a buffer with the required capacity and copy the image in.
+            // The native side writes the patched image back into this buffer.
+            byte[] buffer = new byte[requiredSize];
+            System.Array.Copy(programImage, buffer, programImage.Length);
+
+            // Pass 2: patch.
+            ulong finalSize = 0;
+            NcePatchResult tmp = default;
+            fixed (byte* pBuffer = buffer)
+            {
+                int rc = PatchModuleNative(pBuffer, requiredSize, imageSize, codeOffset,
+                    codeSize, baseVirtualAddr, &finalSize, &tmp);
+                if (rc != 0 || tmp.Success == 0)
+                {
+                    return null;
+                }
+            }
+
+            result = tmp;
+
+            // Trim to the actual patched size.
+            if (finalSize < (ulong)buffer.LongLength)
+            {
+                System.Array.Resize(ref buffer, (int)finalSize);
+            }
+
+            return buffer;
+        }
+
+        /// <summary>
+        /// Queries the buffer capacity needed to patch a module of the given size
+        /// without performing the patch (pass-1 of nce_patch_module).
+        /// </summary>
+        internal static bool TryQueryPatchCapacity(
+            ulong imageSize, ulong codeOffset, ulong codeSize, out ulong requiredCapacity)
+        {
+            requiredCapacity = 0;
+            NcePatchResult result = default;
+            ulong required = 0;
+            int rc = PatchModuleNative(null, 0, imageSize, codeOffset, codeSize,
+                0, &required, &result);
+            if (rc != 0)
+            {
+                return false;
+            }
+
+            requiredCapacity = required;
+            return true;
         }
 
         /// <summary>

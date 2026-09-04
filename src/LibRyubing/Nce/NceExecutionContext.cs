@@ -11,14 +11,13 @@ namespace LibRyubing.Nce
     /// Register accessors operate on a cached snapshot that is synced
     /// to/from the native GuestContext at Execute-loop boundaries (only
     /// safe while the guest is stopped, which the ICpuContext.Execute
-    /// contract guarantees). Vector registers are managed-side storage
-    /// until the native view struct grows a VPR field.
+    /// contract guarantees). GPRs (including SP via index 31) and V-regs
+    /// are carried in <see cref="NceNative.NceGuestContextView"/>.
     /// </summary>
     internal sealed class NceExecutionContext : IExecutionContext
     {
         // Cached native context view (synced at loop boundaries).
         private NceNative.NceGuestContextView _view;
-        private readonly V128[] _v = new V128[32];
 
         // Native core handle; created lazily inside Execute() so that
         // gettid()/sigaltstack() bind to the thread that runs the guest.
@@ -38,14 +37,14 @@ namespace LibRyubing.Nce
         /// <summary>
         /// Creates the native core from the calling thread. Must be called
         /// from the thread that will run guest code (the Execute loop does
-        /// this on first entry).
+        /// this on first entry). The core owns sigaltstack setup — do not
+        /// call <see cref="NceNative.ThreadInit"/> separately.
         /// </summary>
         internal void EnsureCoreCreated()
         {
             if (_coreHandle < 0)
             {
                 NceNative.Initialize();
-                NceNative.ThreadInit();
                 _coreHandle = NceNative.CoreCreate();
             }
         }
@@ -112,7 +111,15 @@ namespace LibRyubing.Nce
         public bool IsAarch32
         {
             get => false; // NCE is AArch64-only
-            set => throw new NotSupportedException("NCE does not support AArch32");
+            set
+            {
+                // KThread always assigns IsAarch32 = !is64Bits at thread init.
+                // Accept false; reject attempts to enter AArch32.
+                if (value)
+                {
+                    throw new NotSupportedException("NCE does not support AArch32");
+                }
+            }
         }
 
         /// <inheritdoc/>
@@ -122,28 +129,16 @@ namespace LibRyubing.Nce
         public bool Running => _running;
 
         /// <inheritdoc/>
-        public ulong GetX(int index)
-        {
-            return _view.GetX(index);
-        }
+        public ulong GetX(int index) => _view.GetX(index);
 
         /// <inheritdoc/>
-        public void SetX(int index, ulong value)
-        {
-            _view.SetX(index, value);
-        }
+        public void SetX(int index, ulong value) => _view.SetX(index, value);
 
         /// <inheritdoc/>
-        public V128 GetV(int index)
-        {
-            return _v[index];
-        }
+        public V128 GetV(int index) => _view.GetV(index);
 
         /// <inheritdoc/>
-        public void SetV(int index, V128 value)
-        {
-            _v[index] = value;
-        }
+        public void SetV(int index, V128 value) => _view.SetV(index, value);
 
         /// <inheritdoc/>
         public void RequestInterrupt()
@@ -200,4 +195,3 @@ namespace LibRyubing.Nce
         }
     }
 }
-

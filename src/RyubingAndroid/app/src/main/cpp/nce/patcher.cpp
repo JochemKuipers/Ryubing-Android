@@ -6,14 +6,17 @@
 #include <cstring>
 #include <bit>
 
-#include <android/log.h>
-
 #include "guest_context.h"
 #include "instructions.h"
 #include "patcher.h"
 
+#if defined(__ANDROID__)
+#include <android/log.h>
 #define LOG_TAG "RyubingNCE"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#else
+#define LOGD(...) ((void)0)
+#endif
 
 namespace Ryubing::Nce {
 
@@ -557,8 +560,14 @@ void Patcher::WriteCntpctHandler(ModuleDestLabel module_dest, oaknut::XReg dest_
                                  oaknut::VectorCodeGenerator& cg) {
     // Scale the host counter to the guest frequency.
     // factor = (guest_freq << 64) / host_freq as a 128-bit fixed-point value.
+#if defined(__aarch64__) || defined(_M_ARM64)
     u64 host_cntfrq;
     asm volatile("mrs %0, cntfrq_el0" : "=r"(host_cntfrq));
+#else
+    // Host unit-test builds may run on x86_64; use guest freq so the emitted
+    // scale factor is 1.0 (the trampoline still encodes correctly for Android).
+    const u64 host_cntfrq = GuestCntfrq;
+#endif
     const unsigned __int128 factor128 =
         (static_cast<unsigned __int128>(GuestCntfrq) << 64) / host_cntfrq;
     const u64 factor_hi = static_cast<u64>(factor128 >> 64);

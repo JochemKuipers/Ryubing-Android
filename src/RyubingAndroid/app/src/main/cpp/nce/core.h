@@ -9,7 +9,6 @@
 #pragma once
 
 #include <atomic>
-#include <memory>
 #include <cstdint>
 
 #include "guest_context.h"
@@ -76,7 +75,7 @@ private:
     int m_thread_id{-1};
     GuestContext m_guest_ctx{};
     NativeExecutionParameters m_thread_params{}; // Owned: TPIDR_EL0 target
-    std::unique_ptr<uint8_t[]> m_signal_stack{};
+    bool m_signal_stack_ready{false};
     std::atomic<bool> m_is_running{false};
 };
 

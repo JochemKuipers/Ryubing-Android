@@ -1,8 +1,12 @@
 using System;
+using System.Runtime.InteropServices;
 using ARMeilleure.Memory;
 using ARMeilleure.Translation.PTC;
 using Ryujinx.Cpu;
+using Ryujinx.Cpu.Jit;
 using Ryujinx.Common.Logging;
+using Ryujinx.Memory;
+using Ryujinx.Memory.Tracking;
 
 namespace LibRyubing.Nce
 {
@@ -16,14 +20,84 @@ namespace LibRyubing.Nce
     ///  - BreakLoop: scheduler interrupt or stop request; invokes
     ///    InterruptCallback and resumes unless StopRunning was called.
     ///  - DataAbort/PrefetchAbort: fatal guest fault; exits the loop.
+    ///
+    /// Guest SIGSEGV inside the host-mapped AS is handled in-signal via
+    /// <see cref="MemoryTracking.VirtualMemoryEvent"/> (GPU dirty / remapping),
+    /// registered through <c>nce_set_memory_config</c>.
     /// </summary>
     internal sealed class NceCpuContext : ICpuContext
     {
         private readonly IMemoryManager _memory;
+        private readonly MemoryTracking _tracking;
+        private readonly NceNative.PageFaultHandler _pageFaultHandler;
+
+        // Active context for the UnmanagedCallersOnly-style delegate target.
+        // One guest process / address space at a time under NCE.
+        private static NceCpuContext s_active;
 
         public NceCpuContext(IMemoryManager memory)
         {
             _memory = memory;
+            _tracking = ResolveTracking(memory);
+            _pageFaultHandler = OnPageFault;
+
+            // Register host-mapped AS so guest SIGSEGV can resolve GPU-protected pages.
+            ulong hostBase = (ulong)(nint)memory.PageTablePointer;
+            ulong asSize = 1UL << memory.AddressSpaceBits;
+            IntPtr handlerPtr = _tracking != null
+                ? Marshal.GetFunctionPointerForDelegate(_pageFaultHandler)
+                : IntPtr.Zero;
+
+            NceNative.SetMemoryConfig(hostBase, asSize, handlerPtr);
+            s_active = this;
+
+            if (_tracking == null)
+            {
+                Logger.Warning?.Print(LogClass.Cpu,
+                    "NCE: memory manager has no MemoryTracking; guest page faults will skip/abort only");
+            }
+        }
+
+        private static MemoryTracking ResolveTracking(IMemoryManager memory)
+        {
+            return memory switch
+            {
+                MemoryManagerHostMapped mapped => mapped.Tracking,
+                MemoryManagerHostNoMirror noMirror => noMirror.Tracking,
+                _ => null,
+            };
+        }
+
+        /// <summary>
+        /// Called from the native SIGSEGV guest path (same pattern as JIT
+        /// NativeSignalHandler → TrackingEventDelegate).
+        /// </summary>
+        private int OnPageFault(ulong guestVa, ulong size, int isWrite)
+        {
+            if (_tracking == null)
+            {
+                return 0;
+            }
+
+            try
+            {
+                ulong pageSize = MemoryBlock.GetPageSize();
+                ulong addressAligned = guestVa & ~(pageSize - 1);
+                ulong sizeAligned = pageSize;
+
+                if (size > pageSize)
+                {
+                    sizeAligned = (size + pageSize - 1) & ~(pageSize - 1);
+                }
+
+                bool handled = _tracking.VirtualMemoryEvent(addressAligned, sizeAligned, isWrite != 0);
+                return handled ? 1 : 0;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error?.Print(LogClass.Cpu, $"NCE page fault handler failed: {ex.Message}");
+                return 0;
+            }
         }
 
         /// <inheritdoc/>
@@ -66,30 +140,29 @@ namespace LibRyubing.Nce
         {
             while (true)
             {
-                // Run the guest until it exits (SVC, interrupt, or fault).
-                // Trampoline auto-lookup: the native side checks the current
-                // PC against the trampoline registry (populated by the
-                // patcher) and re-enters via the fast path when resuming
-                // right after an SVC.
                 ulong hr = NceNative.RunThread(coreHandle, 0);
 
-                // SupervisorCall: the guest hit a patched SVC instruction.
                 if ((hr & NceNative.HaltReasonSupervisorCall) != 0)
                 {
                     HandleSupervisorCall(nceContext, coreHandle);
-                    continue; // Resume the guest.
+                    continue;
                 }
 
-                // BreakLoop: scheduler interrupt or stop request.
+                if ((hr & (NceNative.HaltReasonDataAbort | NceNative.HaltReasonPrefetchAbort)) != 0)
+                {
+                    nceContext.PullFromNative();
+                    Logger.Error?.Print(LogClass.Cpu,
+                        $"NCE: guest fault at pc=0x{nceContext.Pc:X16} (hr=0x{hr:X16})");
+                    return;
+                }
+
                 if ((hr & NceNative.HaltReasonBreakLoop) != 0)
                 {
                     if (nceContext.StopRequested)
                     {
-                        return; // Execute() returns — the thread is done.
+                        return;
                     }
 
-                    // Scheduler interrupt: pull state, notify, check stop
-                    // again (the callback may decide to stop), then resume.
                     nceContext.PullFromNative();
                     nceContext.Callbacks.InterruptCallback?.Invoke(nceContext);
 
@@ -102,16 +175,6 @@ namespace LibRyubing.Nce
                     continue;
                 }
 
-                // DataAbort / PrefetchAbort: unrecoverable guest fault.
-                if ((hr & (NceNative.HaltReasonDataAbort | NceNative.HaltReasonPrefetchAbort)) != 0)
-                {
-                    nceContext.PullFromNative();
-                    Logger.Error?.Print(LogClass.Cpu,
-                        $"NCE: guest fault at pc=0x{nceContext.Pc:X16} (hr=0x{hr:X16})");
-                    return;
-                }
-
-                // StepThread or unknown halt reason: exit.
                 if (hr != 0)
                 {
                     nceContext.PullFromNative();
@@ -120,57 +183,46 @@ namespace LibRyubing.Nce
             }
         }
 
-
         private static void HandleSupervisorCall(NceExecutionContext nceContext, int coreHandle)
         {
-            // Pull the register snapshot (SVC number, args in X0-X7, PC).
             nceContext.PullFromNative();
             uint svcNumber = NceNative.GetSvcNumber(coreHandle);
-
-            // The SupervisorCallback signature expects the address of the
-            // SVC instruction; the trampoline set PC to the instruction
-            // after it, so subtract 4.
             ulong svcAddress = nceContext.Pc - 4;
-
-            // Dispatch to the HLE SVC handler (reads/writes registers via
-            // the IExecutionContext accessors, which operate on the cached
-            // view we just pulled).
             nceContext.Callbacks.SupervisorCallback?.Invoke(nceContext, svcAddress, (int)svcNumber);
-
-            // Publish the (possibly modified) register state back to the
-            // native GuestContext before resuming.
             nceContext.PushToNative();
         }
 
         /// <inheritdoc/>
         public void InvalidateCacheRegion(ulong address, ulong size)
         {
-            // With NCE the guest runs on the real CPU; invalidating the
-            // "JIT cache" reduces to a memory barrier. Code modification by
-            // the guest itself uses IC IVAU which works natively.
+            // NCE has no JIT cache; guest IC IVAU works natively.
         }
 
         /// <inheritdoc/>
         public IDiskCacheLoadState LoadDiskCache(PtcCacheInfo cacheInfo, bool enabled)
         {
-            // NCE does not recompile code, so there is no PTC disk cache.
-            // A future phase may add a "patched image cache" to skip
-            // re-patching on subsequent loads; until then, report nothing.
             return new DummyDiskCacheLoadState();
         }
 
         /// <inheritdoc/>
         public void PrepareCodeRange(ulong address, ulong size)
         {
-            // The code-loading integration (calling nce_patch_module before
-            // the image is written into guest memory) lands with the HLE
-            // loader wiring (phase 4+); the patcher core itself is complete.
+            // Patching happens at load time in ProcessLoaderHelper / IRoInterface.
         }
 
         public void Dispose()
         {
+            if (ReferenceEquals(s_active, this))
+            {
+                NceNative.SetMemoryConfig(0, 0, IntPtr.Zero);
+                s_active = null;
+            }
+
             NceNative.ClearTrampolines();
+
+            // Keep the delegate rooted for the lifetime of the context so the
+            // native function pointer stays valid while cores may still run.
+            GC.KeepAlive(_pageFaultHandler);
         }
     }
 }
-

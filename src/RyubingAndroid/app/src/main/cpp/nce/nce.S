@@ -126,7 +126,9 @@ nce_signal_handler_break_from_run:
     ldr     x3, [x0, #(GuestContextHostContext + HostContextTpidrEl0)]
     msr     tpidr_el0, x3
 
-    /* Tail call the saver: SaveGuestContext(ctx, raw_context). */
+    /* Tail call SaveGuestContext(ctx, raw_context): saves guest state and
+     * restores host SP/callee-saved/PC/X0 so returning from the handler
+     * re-enters host code (matches Eden ArmNce::SaveGuestContext). */
     mov     x1, x2
     b       nce_save_guest_context
 

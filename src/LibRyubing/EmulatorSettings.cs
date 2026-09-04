@@ -50,6 +50,12 @@ namespace LibRyubing
 
         public MemoryManagerMode MemoryManagerMode { get; set; } = MemoryManagerMode.HostMappedUnsafe;
 
+        /// <summary>
+        /// Prefer Native Code Execution (NCE) on ARM64 host with host-mapped memory.
+        /// Default off until homebrew E2E validation; enable via ryubing_set_cpu_config.
+        /// </summary>
+        public bool UseNce { get; set; }
+
         public BackendThreading BackendThreading { get; set; } = BackendThreading.Auto;
 
         public float ResScale { get; set; } = 1f;

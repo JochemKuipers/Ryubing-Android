@@ -47,6 +47,13 @@ namespace LibRyubing
             _settings.MemoryManagerMode = (MemoryManagerMode)memoryManagerMode;
         }
 
+        /// <summary>CPU backend flags. useNce != 0 enables NCE when HostMapped + ARM64.</summary>
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_set_cpu_config")]
+        public static void SetCpuConfig(int useNce)
+        {
+            _settings.UseNce = useNce != 0;
+        }
+
         [UnmanagedCallersOnly(EntryPoint = "ryubing_set_system_config")]
         public static void SetSystemConfig(int language, int region, int enableDockedMode, int enablePtc)
         {

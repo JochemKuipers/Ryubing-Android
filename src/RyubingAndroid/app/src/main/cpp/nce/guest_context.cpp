@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
 // Guest context save/restore across signal frames. Called from the assembly
-// signal handlers in nce.S. Ported from eden's arm_nce.cpp.
+// signal handlers in nce.S. Ported from eden's ArmNce::SaveGuestContext /
+// RestoreGuestContext.
 
 #include <cstring>
 #include <ucontext.h>
@@ -12,7 +13,7 @@ namespace Ryubing::Nce {
 
 // Walk the ucontext_t __reserved array to find the fpsimd_context.
 // The kernel appends tagged structures; we skip until FPSIMD_MAGIC.
-static fpsimd_context* GetFloatingPointState(mcontext_t& host_ctx) {
+fpsimd_context* GetFloatingPointState(mcontext_t& host_ctx) {
     _aarch64_ctx* header = reinterpret_cast<_aarch64_ctx*>(&host_ctx.__reserved);
     while (header->magic != FPSIMD_MAGIC) {
         header = reinterpret_cast<_aarch64_ctx*>(reinterpret_cast<char*>(header) + header->size);
@@ -63,9 +64,11 @@ void* nce_restore_guest_context(void* raw_context) {
     return tpidr;
 }
 
-// Called from nce_signal_handler_break_from_run (SIGURG handler) and
-// HandleFailedGuestFault. Saves all guest registers from the signal frame
-// into the GuestContext so that returning from the handler enters host code.
+// Called from nce_signal_handler_break_from_run (SIGURG) and
+// HandleFailedGuestFault (prefetch abort). Saves guest registers from the
+// signal frame, then restores host SP/callee-saved regs and redirects PC to
+// the saved host return address (X30) with esr_el1 in X0 — matching Eden's
+// ArmNce::SaveGuestContext as a single atomic transition back to host.
 void nce_save_guest_context(Ryubing::Nce::GuestContext* guest_ctx, void* raw_context) {
     using namespace Ryubing::Nce;
 
@@ -81,21 +84,11 @@ void nce_save_guest_context(Ryubing::Nce::GuestContext* guest_ctx, void* raw_con
     guest_ctx->fpsr = fpctx->fpsr;
     guest_ctx->fpcr = fpctx->fpcr;
     guest_ctx->pstate = static_cast<u32>(host_ctx.pstate);
-    guest_ctx->sp = host_ctx.sp;
     guest_ctx->pc = host_ctx.pc;
-}
+    guest_ctx->sp = host_ctx.sp;
 
-// Called from nce_signal_handler_break_from_run after nce_save_guest_context.
-// Restores the host's saved state into the signal frame and returns the
-// halt reason (from esr_el1) in x0.
-void nce_return_to_host(Ryubing::Nce::GuestContext* guest_ctx, void* raw_context) {
-    using namespace Ryubing::Nce;
-
-    // Retrieve the host context.
-    auto& host_ctx = static_cast<ucontext_t*>(raw_context)->uc_mcontext;
-
-    // Retrieve the host floating point state.
-    auto* fpctx = GetFloatingPointState(host_ctx);
+    // Restore stack pointer.
+    host_ctx.sp = guest_ctx->host_ctx.host_sp;
 
     // Restore host callee-saved registers.
     std::memcpy(&host_ctx.regs[19], guest_ctx->host_ctx.host_saved_regs.data(),

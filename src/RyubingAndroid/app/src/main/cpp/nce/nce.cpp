@@ -16,6 +16,7 @@
 
 #define LOG_TAG "RyubingNCE"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
 namespace {
@@ -70,7 +71,7 @@ int32_t nce_get_abi_version(void) {
 }
 
 const char* nce_get_version_string(void) {
-    return "ryubing-nce 0.4.0 (phase 3: execution core)";
+    return "ryubing-nce 0.7.1 (phase 6: alignment interpreter)";
 }
 
 int32_t nce_patch_module(
@@ -119,6 +120,27 @@ int32_t nce_patch_module(
         return -2;
     }
 
+    // Count patchable opcodes on the *unpatched* text (after RelocateAndCopy
+    // SVC sites are branches and exclusives are already ordered).
+    uint32_t svc_count = 0, sysreg_count = 0, excl_count = 0;
+    {
+        const auto text = std::span<const uint8_t>{image}.subspan(
+            static_cast<size_t>(code_offset), static_cast<size_t>(code_size));
+        const auto words = std::span<const uint32_t>{
+            reinterpret_cast<const uint32_t*>(text.data()), text.size() / sizeof(uint32_t)};
+        constexpr uint32_t StartIndex = 0x24 / sizeof(uint32_t);
+        for (uint32_t i = StartIndex; i < static_cast<uint32_t>(words.size()); i++) {
+            const uint32_t inst = words[i];
+            if (Ryubing::Nce::SVC{inst}.Verify()) {
+                svc_count++;
+            } else if (Ryubing::Nce::MRS{inst}.Verify() || Ryubing::Nce::MSR{inst}.Verify()) {
+                sysreg_count++;
+            } else if (Ryubing::Nce::Exclusive{inst}.Verify()) {
+                excl_count++;
+            }
+        }
+    }
+
     EntryTrampolines trampolines;
     if (!patcher.RelocateAndCopy(base_virtual_addr, code, image, &trampolines)) {
         LOGE("patch_module: RelocateAndCopy failed");
@@ -146,6 +168,9 @@ int32_t nce_patch_module(
     memset(out_result, 0, sizeof(*out_result));
     out_result->success = 1;
     out_result->patched_image_size = final_size;
+    out_result->patched_svc_count = svc_count;
+    out_result->patched_sysreg_count = sysreg_count;
+    out_result->converted_exclusive_count = excl_count;
 
     const auto mode = patcher.GetPatchMode();
     out_result->patch_mode = static_cast<uint32_t>(mode);
@@ -153,9 +178,12 @@ int32_t nce_patch_module(
         case Ryubing::Nce::PatchMode::PreText:
             out_result->patch_offset = 0;
             out_result->patch_size = patcher.GetSectionSize();
+            LOGW("patch_module: PreText mode — text is shifted by 0x%llx bytes; "
+                 "loaders must map the full patched image from the module base",
+                 (unsigned long long)out_result->patch_size);
             break;
         case Ryubing::Nce::PatchMode::PostData:
-            out_result->patch_offset = image_size; // Patch appended after original image
+            out_result->patch_offset = image_size;
             out_result->patch_size = patcher.GetSectionSize();
             break;
         case Ryubing::Nce::PatchMode::Split:
@@ -163,32 +191,20 @@ int32_t nce_patch_module(
             out_result->pre_patch_size = patcher.GetPreSectionSize();
             out_result->patch_offset = final_size - patcher.GetSectionSize();
             out_result->patch_size = patcher.GetSectionSize();
+            LOGW("patch_module: Split mode — pre=0x%llx post=0x%llx; "
+                 "verify branch reach and RX on both patch sections",
+                 (unsigned long long)out_result->pre_patch_size,
+                 (unsigned long long)out_result->patch_size);
             break;
         default:
             break;
     }
 
-    // Debug counters (scanned in a second pass; cheap for typical modules).
-    {
-        const auto text = std::span<const uint8_t>{image}.subspan(
-            static_cast<size_t>(code_offset), static_cast<size_t>(code_size));
-        const auto words = std::span<const uint32_t>{
-            reinterpret_cast<const uint32_t*>(text.data()), text.size() / sizeof(uint32_t)};
-        uint32_t svc_count = 0, sysreg_count = 0, excl_count = 0;
-        constexpr uint32_t StartIndex = 0x24 / sizeof(uint32_t);
-        for (uint32_t i = StartIndex; i < static_cast<uint32_t>(words.size()); i++) {
-            const uint32_t inst = words[i];
-            if (Ryubing::Nce::SVC{inst}.Verify()) {
-                svc_count++;
-            } else if (Ryubing::Nce::MRS{inst}.Verify() || Ryubing::Nce::MSR{inst}.Verify()) {
-                sysreg_count++;
-            } else if (Ryubing::Nce::Exclusive{inst}.Verify()) {
-                excl_count++;
-            }
-        }
-        out_result->patched_svc_count = svc_count;
-        out_result->patched_sysreg_count = sysreg_count;
-        out_result->converted_exclusive_count = excl_count;
+    // Growth sanity: reserved capacity should cover the final image.
+    if (final_size > image_size + PatchGrowthEstimate(image_size)) {
+        LOGW("patch_module: final size %llu exceeded growth estimate %llu (still fits capacity)",
+             (unsigned long long)final_size,
+             (unsigned long long)(image_size + PatchGrowthEstimate(image_size)));
     }
 
     LOGI("patch_module: ok — image %llu -> %llu bytes, mode=%u, svc=%u, sysreg=%u, excl=%u",
@@ -272,6 +288,8 @@ void nce_get_context(int32_t core_handle, NceGuestContextView* out_view) {
     out_view->fpsr = ctx.fpsr;
     out_view->tpidr_el0 = ctx.tpidr_el0;
     out_view->tpidrro_el0 = ctx.tpidrro_el0;
+    static_assert(sizeof(out_view->v) == sizeof(ctx.vector_registers));
+    std::memcpy(out_view->v, ctx.vector_registers.data(), sizeof(out_view->v));
 }
 
 void nce_set_context(int32_t core_handle, const NceGuestContextView* in_view) {
@@ -289,6 +307,8 @@ void nce_set_context(int32_t core_handle, const NceGuestContextView* in_view) {
     ctx.fpsr = in_view->fpsr;
     ctx.tpidr_el0 = in_view->tpidr_el0;
     ctx.tpidrro_el0 = in_view->tpidrro_el0;
+    static_assert(sizeof(in_view->v) == sizeof(ctx.vector_registers));
+    std::memcpy(ctx.vector_registers.data(), in_view->v, sizeof(ctx.vector_registers));
 }
 
 

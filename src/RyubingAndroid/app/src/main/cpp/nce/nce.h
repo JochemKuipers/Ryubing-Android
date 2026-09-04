@@ -10,8 +10,8 @@
 //   - Guest thread execution management
 //
 // The managed core (libryubing.so) drives this library through the C ABI
-// below via P/Invoke; callbacks back into managed code use a function-
-// pointer table supplied at nce_initialize time.
+// below via P/Invoke. SVC and fault exits return HaltReason bits to the
+// managed Execute loop, which dispatches existing ExceptionCallbacks.
 
 #ifndef RYUBING_NCE_H
 #define RYUBING_NCE_H
@@ -25,12 +25,29 @@ extern "C" {
 
 // --- Version / capability query (always available) ---
 
-#define RYUBING_NCE_ABI_VERSION 1
+#define RYUBING_NCE_ABI_VERSION 3
 
 int32_t nce_get_abi_version(void);
 
 // Returns a human-readable version string (static storage, no free needed).
 const char* nce_get_version_string(void);
+
+// --- Guest memory / page-fault integration (phase 5) ---
+
+// Called from the SIGSEGV guest path when the fault address lies in the
+// registered host-mapped guest address space. Return 1 if the access was
+// resolved (guest should resume), 0 to fall through to the failed-fault path.
+//   guest_va: page-aligned guest virtual address
+//   size:     typically one page
+//   is_write: 1 if the access was a store (ESR WnR), 0 if a load
+typedef int32_t (*NcePageFaultHandler)(uint64_t guest_va, uint64_t size, int32_t is_write);
+
+// Registers the host-mapped guest address space and an optional page-fault
+// callback (GPU tracking / remapping). Pass handler=NULL to clear.
+// host_base is the host pointer returned as IMemoryManager.PageTablePointer
+// (guest VA 0). Safe to call before or after nce_initialize.
+void nce_set_memory_config(uint64_t host_base, uint64_t address_space_size,
+                           NcePageFaultHandler handler);
 
 // --- Guest code patching (phase 1) ---
 
@@ -72,8 +89,9 @@ int32_t nce_patch_module(
 
 // Guest register state snapshot, used to get/set the core's context from
 // managed code. Must not be accessed while the guest thread is running.
+// Layout must match LibRyubing.Nce.NceNative.NceGuestContextView exactly.
 typedef struct NceGuestContextView {
-    uint64_t x[31];        // X0-X30
+    uint64_t x[31];        // X0-X30 (index 31 on the managed side maps to sp)
     uint64_t sp;
     uint64_t pc;
     uint32_t pstate;
@@ -81,6 +99,9 @@ typedef struct NceGuestContextView {
     uint32_t fpsr;
     uint64_t tpidr_el0;
     uint64_t tpidrro_el0;
+    // V0-V31 as little-endian ulong pairs (e0=low 64, e1=high 64). Align so
+    // the managed Sequential layout and native memcpy stay in sync.
+    uint64_t v[32][2];
 } NceGuestContextView;
 
 // NOTE: thread parameters (the TPIDR_EL0 target while the guest runs) are
@@ -93,8 +114,9 @@ typedef struct NceGuestContextView {
 // Returns 0 on success.
 int32_t nce_initialize(void);
 
-// Sets up the calling thread's alternate signal stack. Call once from each
-// thread that will run guest code (i.e., each emulated CPU core thread).
+// Sets up the calling thread's alternate signal stack. Prefer letting
+// nce_core_create do this (single ownership). Safe to call independently
+// only if no core will be created on this thread afterward.
 // Returns 0 on success.
 int32_t nce_thread_init(void);
 

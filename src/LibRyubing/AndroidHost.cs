@@ -321,7 +321,7 @@ namespace LibRyubing
             // Match desktop: MatchSystemTime forces offset 0 so guest clock tracks host.
             long timeOffset = settings.MatchSystemTime ? 0 : settings.SystemTimeOffset;
 
-            return new(
+            HleConfiguration config = new(
                 settings.MemoryConfiguration,
                 (SystemLanguage)settings.SystemLanguage,
                 (RegionCode)settings.SystemRegion,
@@ -350,6 +350,26 @@ namespace LibRyubing
                 gdbStubPort: 0,
                 debuggerSuspendOnStart: false,
                 customVSyncInterval: settings.CustomVSyncInterval);
+
+            // NCE: inject engine + patcher from LibRyubing so HLE stays free of that reference.
+            // Still default-off; factory also gates on HostMapped + ARM64 host + 64-bit guest.
+            if (settings.UseNce)
+            {
+                if (LibRyubing.Nce.NceNative.CheckAvailable())
+                {
+                    config.UseNce = true;
+                    config.CpuEngineFactory = tickSource => new LibRyubing.Nce.NceEngine(tickSource);
+                    config.NceModulePatcher = new LibRyubing.Nce.NceModulePatcher();
+                    Logger.Info?.Print(LogClass.Application, "NCE CPU backend requested and available");
+                }
+                else
+                {
+                    Logger.Warning?.Print(LogClass.Application,
+                        "UseNce set but libryubing-nce.so is unavailable; falling back to JIT");
+                }
+            }
+
+            return config;
         }
 
         private static bool LoadByExtension(string path, string displayName)

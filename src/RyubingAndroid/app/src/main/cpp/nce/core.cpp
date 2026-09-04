@@ -110,12 +110,14 @@ int InstallSignalHandlers() {
         }
 
         // SIGBUS: guest alignment fault (or host — TLS magic decides).
+        // Save the original action so we can chain host faults to it.
         struct sigaction alignment_action {};
         alignment_action.sa_flags = SA_SIGINFO | SA_ONSTACK;
         alignment_action.sa_sigaction =
             reinterpret_cast<HandlerType>(&nce_signal_handler_alignment_fault);
         alignment_action.sa_mask = signal_mask;
-        if (RealSigAction(GuestAlignmentFaultSignal, &alignment_action, nullptr) != 0) {
+        if (RealSigAction(GuestAlignmentFaultSignal, &alignment_action,
+                          &g_orig_bus_action) != 0) {
             LOGE("Failed to install SIGBUS handler: %s", strerror(errno));
             result = -1;
             return;
@@ -134,9 +136,6 @@ int InstallSignalHandlers() {
             return;
         }
 
-        // Save the original SIGBUS action too.
-        RealSigAction(GuestAlignmentFaultSignal, nullptr, &g_orig_bus_action);
-
         LOGI("NCE signal handlers installed (SIGUSR2, SIGURG, SIGBUS, SIGSEGV)");
         result = 0;
     });
@@ -147,8 +146,9 @@ int InstallSignalHandlers() {
 int SetupThreadSignalStack() {
     // Each guest thread needs its own alternate signal stack so the
     // handlers can run even if the guest exhausts the normal stack.
-    // Note: the allocation is intentionally leaked; sigaltstack references
-    // it for the lifetime of the thread.
+    // Allocation is intentionally leaked: sigaltstack references it for
+    // the lifetime of the thread, and cores may be destroyed while the
+    // thread is still alive.
     auto* stack = new uint8_t[SignalStackSize];
 
     stack_t ss{};
@@ -174,11 +174,13 @@ int NceCore::Initialize() {
         return -1;
     }
 
-    if (!m_signal_stack) {
+    // Single ownership: only the core sets up the altstack for this thread.
+    // Callers must not also call nce_thread_init() beforehand.
+    if (!m_signal_stack_ready) {
         if (SetupThreadSignalStack() != 0) {
             return -1;
         }
-        m_signal_stack.reset(new uint8_t[1]); // Marker: stack was set up
+        m_signal_stack_ready = true;
     }
 
     return 0;
