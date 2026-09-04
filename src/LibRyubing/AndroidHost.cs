@@ -70,6 +70,7 @@ namespace LibRyubing
         private static volatile bool _isActive;
         private static long _presentedFrames;
         private static long _bootStartTicks;
+        private static volatile bool _usingNce;
         private static volatile bool _isStopped;
         private static volatile bool _screenshotRequested;
         private static readonly object _screenshotLock = new();
@@ -85,6 +86,35 @@ namespace LibRyubing
         public static Switch Device => _device;
         public static AndroidGamepadDriver GamepadDriver => _gamepadDriver;
         public static bool IsRunning => _isActive && !_isStopped;
+
+        /// <summary>
+        /// Snapshot of rolling game FPS / FIFO stats for the in-game HUD.
+        /// Returns false when no device is active.
+        /// </summary>
+        public static bool TryGetPerformanceStats(
+            out double gameFps,
+            out double frameTimeMs,
+            out double fifoPercent,
+            out long presentedFrames,
+            out bool usingNce)
+        {
+            gameFps = 0;
+            frameTimeMs = 0;
+            fifoPercent = 0;
+            presentedFrames = Interlocked.Read(ref _presentedFrames);
+            usingNce = _usingNce;
+
+            Switch device = _device;
+            if (device == null || !_isActive || _isStopped)
+            {
+                return false;
+            }
+
+            gameFps = device.Statistics.GetGameFrameRate();
+            frameTimeMs = gameFps > 0.0 ? device.Statistics.GetGameFrameTime() : 0.0;
+            fifoPercent = device.Statistics.GetFifoPercent();
+            return true;
+        }
 
         /// <summary>
         /// Registers a libvulkan.so handle from adrenotools. Pass zero to use the system loader.
@@ -294,6 +324,7 @@ namespace LibRyubing
             GraphicsConfig.EnableSpirvCompilationOnVulkan = settings.EnableSpirvCompilationOnVulkan;
 
             Optimizations.LowPower = settings.EnableLowPowerPtc;
+            _usingNce = false;
 
             if (settings.EnableFileLog)
             {
@@ -431,6 +462,7 @@ namespace LibRyubing
                     config.CpuEngineFactory = tickSource => new LibRyubing.Nce.NceEngine(tickSource);
                     config.NceModulePatcher = new LibRyubing.Nce.NceModulePatcher();
                     config.NceAddressSpaceWindow = nceWindow;
+                    _usingNce = true;
                     Logger.Info?.Print(LogClass.Application,
                         $"NCE CPU backend requested and available (debug level={settings.NceDebugLevel}, native={LibRyubing.Nce.NceNative.VersionString})");
 

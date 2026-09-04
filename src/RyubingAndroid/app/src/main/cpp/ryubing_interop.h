@@ -35,6 +35,13 @@ void ryubing_set_callbacks(RyubingCallbacks *callbacks);
 void ryubing_set_vulkan_driver(int64_t driverHandle);
 int ryubing_load_application(const char *path, const char *displayName);
 int ryubing_is_running();
+// Fills optional out-params (pass nullptr to skip). Returns 1 when emulation is active.
+int ryubing_get_performance_stats(
+    double *gameFps,
+    double *frameTimeMs,
+    double *fifoPercent,
+    int64_t *presentedFrames,
+    int *usingNce);
 void ryubing_reload_keys();
 int ryubing_install_firmware(const char *path);
 void ryubing_set_button_state(int buttonMask);

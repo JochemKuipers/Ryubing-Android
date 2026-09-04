@@ -156,6 +156,56 @@ namespace LibRyubing
         [UnmanagedCallersOnly(EntryPoint = "ryubing_is_running")]
         public static int IsRunning() => AndroidHost.IsRunning ? 1 : 0;
 
+        /// <summary>
+        /// Fills out-params with the current HUD snapshot. Returns 1 when emulation is active.
+        /// Pointers may be null to skip a field.
+        /// </summary>
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_get_performance_stats")]
+        public static int GetPerformanceStats(
+            double* gameFps,
+            double* frameTimeMs,
+            double* fifoPercent,
+            long* presentedFrames,
+            int* usingNce)
+        {
+            if (!AndroidHost.TryGetPerformanceStats(
+                    out double fps,
+                    out double ft,
+                    out double fifo,
+                    out long presented,
+                    out bool nce))
+            {
+                return 0;
+            }
+
+            if (gameFps != null)
+            {
+                *gameFps = fps;
+            }
+
+            if (frameTimeMs != null)
+            {
+                *frameTimeMs = ft;
+            }
+
+            if (fifoPercent != null)
+            {
+                *fifoPercent = fifo;
+            }
+
+            if (presentedFrames != null)
+            {
+                *presentedFrames = presented;
+            }
+
+            if (usingNce != null)
+            {
+                *usingNce = nce ? 1 : 0;
+            }
+
+            return 1;
+        }
+
         // --- Content probing ---
 
         [UnmanagedCallersOnly(EntryPoint = "ryubing_query_application_info")]

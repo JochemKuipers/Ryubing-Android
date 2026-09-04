@@ -159,6 +159,15 @@ fun EmulationScreen(
             },
         )
 
+        if (config.showPerformanceHud && !showExitMenu) {
+            PerformanceHud(
+                config = config,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(12.dp),
+            )
+        }
+
         if (showTouchOverlay.value && !showExitMenu) {
             TouchControls(
                 modifier = Modifier.fillMaxSize(),

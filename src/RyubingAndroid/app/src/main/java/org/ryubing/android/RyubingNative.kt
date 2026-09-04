@@ -64,6 +64,13 @@ object RyubingNative {
         fun ryubing_set_vulkan_driver(driverHandle: Long)
         fun ryubing_load_application(path: String, displayName: String): Int
         fun ryubing_is_running(): Int
+        fun ryubing_get_performance_stats(
+            gameFps: com.sun.jna.ptr.DoubleByReference,
+            frameTimeMs: com.sun.jna.ptr.DoubleByReference,
+            fifoPercent: com.sun.jna.ptr.DoubleByReference,
+            presentedFrames: com.sun.jna.ptr.LongByReference,
+            usingNce: com.sun.jna.ptr.IntByReference,
+        ): Int
         fun ryubing_query_application_info(path: String, displayName: String, outJsonPath: String): Int
         fun ryubing_probe_title_update(path: String, displayName: String, outJsonPath: String): Int
         fun ryubing_get_dlc_content_list(path: String, displayName: String, titleId: Long, outJsonPath: String): Int

@@ -59,6 +59,15 @@ data class EmulatorConfig(
     val enableFileLog: Boolean = false,
     val audioVolume: Float = 1f,
     val audioMuted: Boolean = false,
+    /** Master switch for the in-game performance HUD. */
+    val showPerformanceHud: Boolean = true,
+    val hudShowFps: Boolean = true,
+    val hudShowFrameTime: Boolean = true,
+    val hudShowFifo: Boolean = true,
+    val hudShowCpuBackend: Boolean = true,
+    val hudShowMemory: Boolean = true,
+    val hudShowGpu: Boolean = true,
+    val hudShowPresentedFrames: Boolean = true,
     /** When true, face buttons follow Switch layout (recommended for Nintendo titles). */
     val useSwitchLayout: Boolean = true,
     val showTouchControls: Boolean = true,

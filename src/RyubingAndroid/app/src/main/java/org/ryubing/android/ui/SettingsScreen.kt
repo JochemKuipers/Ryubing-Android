@@ -339,6 +339,34 @@ private fun SystemSettingsPage(config: EmulatorConfig, update: (EmulatorConfig) 
 
 @Composable
 private fun GraphicsSettingsPage(config: EmulatorConfig, update: (EmulatorConfig) -> Unit) {
+    Text("In-game overlays", style = MaterialTheme.typography.titleSmall)
+    SwitchRow("Performance HUD", config.showPerformanceHud) {
+        update(config.copy(showPerformanceHud = it))
+    }
+    if (config.showPerformanceHud) {
+        SwitchRow("FPS", config.hudShowFps) {
+            update(config.copy(hudShowFps = it))
+        }
+        SwitchRow("Frame time", config.hudShowFrameTime) {
+            update(config.copy(hudShowFrameTime = it))
+        }
+        SwitchRow("FIFO %", config.hudShowFifo) {
+            update(config.copy(hudShowFifo = it))
+        }
+        SwitchRow("CPU backend (NCE/JIT)", config.hudShowCpuBackend) {
+            update(config.copy(hudShowCpuBackend = it))
+        }
+        SwitchRow("Process memory", config.hudShowMemory) {
+            update(config.copy(hudShowMemory = it))
+        }
+        SwitchRow("GPU backend", config.hudShowGpu) {
+            update(config.copy(hudShowGpu = it))
+        }
+        SwitchRow("Presented frames", config.hudShowPresentedFrames) {
+            update(config.copy(hudShowPresentedFrames = it))
+        }
+    }
+    HorizontalDivider(Modifier.padding(vertical = 12.dp))
     DropdownRow(
         label = "Resolution scale",
         valueLabel = "${config.resScale}x",
