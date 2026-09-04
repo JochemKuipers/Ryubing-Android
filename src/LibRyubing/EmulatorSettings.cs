@@ -10,7 +10,7 @@ namespace LibRyubing
     /// </summary>
     internal sealed class EmulatorSettings
     {
-        public MemoryConfiguration MemoryConfiguration { get; set; } = MemoryConfiguration.MemoryConfiguration8GiB;
+        public MemoryConfiguration MemoryConfiguration { get; set; } = MemoryConfiguration.MemoryConfiguration4GiB;
 
         /// <summary>Values match <c>Ryujinx.HLE.HOS.SystemState.SystemLanguage</c>.</summary>
         public int SystemLanguage { get; set; } = 1; // AmericanEnglish

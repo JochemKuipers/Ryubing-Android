@@ -1,6 +1,5 @@
 package org.ryubing.android.data
 
-import android.app.ActivityManager
 import android.content.Context
 import androidx.core.content.edit
 
@@ -113,23 +112,11 @@ class SettingsRepository(private val context: Context) {
     }
 
     /**
-     * Prefer enough guest DRAM for Pokémon-scale MapPhysicalMemory.
-     * 12 GiB when the device has ≥12 GiB RAM; 8 GiB at ≥8 GiB; else 6 GiB at ≥6 GiB; else 4 GiB.
+     * Retail Switch default is 4 GiB. Larger guest DRAM is an opt-in for texture packs
+     * and is unstable on mobile — never auto-select 8/12 GiB.
      * (Enum: 0=4GiB, 1=6GiB, 2=8GiB, 3=12GiB.)
      */
-    private fun defaultMemoryConfiguration(): Int {
-        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-            ?: return 0
-        val info = ActivityManager.MemoryInfo()
-        activityManager.getMemoryInfo(info)
-        val gb = info.totalMem / (1024L * 1024L * 1024L)
-        return when {
-            gb >= 12L -> 3 // 12 GiB
-            gb >= 8L -> 2  // 8 GiB
-            gb >= 6L -> 1  // 6 GiB
-            else -> 0
-        }
-    }
+    private fun defaultMemoryConfiguration(): Int = 0
 
     private companion object {
         const val KEY_MEM_CONFIG = "mem_config"

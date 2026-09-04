@@ -13,7 +13,7 @@ code, not just docs:
 | NCE / Hypervisor | **off** (`useHypervisor: false`) | `AndroidHost.BuildConfiguration` | NCE is risky/unavailable on most Android kernels; use the ARMeilleure JIT path. |
 | PPTC | **off** (`EnablePtc`) | `EmulatorConfig` / `EmulatorSettings` | Startup + memory cost and correctness risk on mobile; opt-in. |
 | Memory manager | HostMappedUnsafe | `EmulatorSettings.MemoryManagerMode` | Fastest; downgrade to HostMapped if a title misbehaves. |
-| DRAM | 4 GiB (6 GiB on devices with ≥ 8 GiB RAM) | `SettingsRepository.defaultMemoryConfiguration` | Retail Switch default; 6 GiB avoids `MapPhysicalMemory LimitReached` on heavy titles (e.g. Pokémon SV + DLC) without overcommitting on 6–8 GB phones. |
+| DRAM | **4 GiB** | `SettingsRepository.defaultMemoryConfiguration` | Retail Switch default. Larger sizes (6/8 GiB) are opt-in for texture packs and unstable on mobile; never auto-select 12 GiB. |
 | Backend threading | Auto | `EmulatorSettings.BackendThreading` | Lets the Vulkan backend decide per device. |
 | Shader cache | on | `GraphicsConfig.EnableShaderCache` | Big win for repeat launches. |
 

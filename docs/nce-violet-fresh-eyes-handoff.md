@@ -46,7 +46,8 @@ Tracking soft-faults during bulk uploads fault at the **same PC, advancing pages
 NCE_SMOKE_TITLE_ID=01002B30028F6000 ./scripts/android-deploy.sh nce-smoke 90   # Celeste
 NCE_SMOKE_USE_NCE=0 ./scripts/android-deploy.sh nce-smoke 60                   # JIT baseline
 NCE_SMOKE_DISABLE_MODS=1 ./scripts/android-deploy.sh nce-smoke 60              # temp disable mods.json
-NCE_SMOKE_MEM_CONFIG=3   # 12 GiB guest DRAM (default in smoke)
+# Optional only — leave unset to keep the app's 4 GiB default (do not force 12 GiB):
+# NCE_SMOKE_MEM_CONFIG=0|1|2|3
 ```
 
 Triage PASS ideally wants `BOOT|PRESENT frames=1`. User-confirmed in-game is the stronger signal if present logging is sparse.

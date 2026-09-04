@@ -641,19 +641,22 @@ cmd_nce_smoke() {
     cmd_install
 
     require_device
-    # Ensure enough guest DRAM for Violet MapPhysicalMemory (prefs may still be 4GiB).
-    # MemoryConfiguration: 0=4GiB 1=6GiB 2=8GiB 3=12GiB. Override with NCE_SMOKE_MEM_CONFIG.
-    local mem_cfg="${NCE_SMOKE_MEM_CONFIG:-3}"
-    adb shell "run-as $PACKAGE sh -c 'cd shared_prefs 2>/dev/null || exit 0; \
-      if [ -f ryubing_settings.xml ]; then \
-        grep -q mem_config ryubing_settings.xml \
-          && sed -i \"s/name=\\\"mem_config\\\" value=\\\"[0-9]*\\\"/name=\\\"mem_config\\\" value=\\\"${mem_cfg}\\\"/\" ryubing_settings.xml \
-          || sed -i \"s|<map>|<map>\\n    <int name=\\\"mem_config\\\" value=\\\"${mem_cfg}\\\" />|\" ryubing_settings.xml; \
-      else \
-        printf \"%s\\n\" \"<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\" \"<map>\" \"    <int name=\\\"mem_config\\\" value=\\\"${mem_cfg}\\\" />\" \"</map>\" > ryubing_settings.xml; \
-      fi'" >/dev/null 2>&1 \
-      && echo "Forced ryubing_settings mem_config=${mem_cfg}" \
-      || echo "Note: could not force mem_config=${mem_cfg} via run-as"
+    # Do not touch mem_config by default — retail default is 4 GiB; larger DRAM is for
+    # texture packs and is unstable (never force 12 GiB). Optional override only:
+    #   NCE_SMOKE_MEM_CONFIG=0|1|2|3   (4/6/8/12 GiB)
+    if [[ -n "${NCE_SMOKE_MEM_CONFIG:-}" ]]; then
+        local mem_cfg="$NCE_SMOKE_MEM_CONFIG"
+        adb shell "run-as $PACKAGE sh -c 'cd shared_prefs 2>/dev/null || exit 0; \
+          if [ -f ryubing_settings.xml ]; then \
+            grep -q mem_config ryubing_settings.xml \
+              && sed -i \"s/name=\\\"mem_config\\\" value=\\\"[0-9]*\\\"/name=\\\"mem_config\\\" value=\\\"${mem_cfg}\\\"/\" ryubing_settings.xml \
+              || sed -i \"s|<map>|<map>\\n    <int name=\\\"mem_config\\\" value=\\\"${mem_cfg}\\\" />|\" ryubing_settings.xml; \
+          else \
+            printf \"%s\\n\" \"<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\" \"<map>\" \"    <int name=\\\"mem_config\\\" value=\\\"${mem_cfg}\\\" />\" \"</map>\" > ryubing_settings.xml; \
+          fi'" >/dev/null 2>&1 \
+          && echo "Forced ryubing_settings mem_config=${mem_cfg}" \
+          || echo "Note: could not force mem_config=${mem_cfg} via run-as"
+    fi
 
     # NCE_SMOKE_USE_NCE=0 runs the same smoke on the JIT backend (baseline for
     # deciding whether a failure is NCE-specific); default leaves the pref alone.
