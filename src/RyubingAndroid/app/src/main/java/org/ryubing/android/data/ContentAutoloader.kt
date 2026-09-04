@@ -13,8 +13,9 @@ import java.io.File
  * Walks a user-selected Updates/DLC folder, probes each `.nsp`/`.xci`, and merges
  * matching content into `{filesDir}/games/{titleId}/updates.json` and `dlc.json`.
  *
- * Prefers real filesystem paths via [SafPathResolver]. Otherwise probes through a
- * temporary SAF fd and only copies into app storage when a match is found.
+ * Prefers real filesystem paths via [SafPathResolver] and registers them in place
+ * (no copy). Only copies into app storage when a match is found and the URI has no
+ * resolvable path — the native core needs a durable filesystem path.
  */
 class ContentAutoloader(
     private val context: Context,
@@ -84,13 +85,10 @@ class ContentAutoloader(
     ): AssociateResult {
         SafPathResolver.resolve(context, doc.uri)?.let { real ->
             Log.d(TAG, "Resolved $name -> $real")
-            val preview = classify(real, name, gamesByTid)
-            if (preview == AssociateResult.None) return AssociateResult.None
-            val durable = copyFileToDurable(real, name, durableRoot) ?: return AssociateResult.None
-            return tryAssociate(durable, name, gamesByTid)
+            return tryAssociate(real, name, gamesByTid)
         }
 
-        // Probe via fd without copying; copy only if something matches.
+        // No real path: probe via fd, then copy only if something matches.
         var pfd: ParcelFileDescriptor? = null
         return try {
             pfd = context.contentResolver.openFileDescriptor(doc.uri, "r") ?: return AssociateResult.None
@@ -143,11 +141,26 @@ class ContentAutoloader(
 
         val meta = ContentMetadataStore.loadUpdates(appDataPath, baseTid)
         if (path in meta.paths) return AssociateResult.None
-        // Same content may already be registered under a different location (e.g. after
-        // migration into app storage); dedupe by file name so autoload doesn't duplicate it.
-        if (meta.paths.any { File(it).name.equals(File(path).name, ignoreCase = true) }) {
+
+        val sameNameIdx = meta.paths.indexOfFirst {
+            File(it).name.equals(File(path).name, ignoreCase = true)
+        }
+        if (sameNameIdx >= 0) {
+            val existing = meta.paths[sameNameIdx]
+            // Prefer an external path over a previous app-storage duplicate.
+            if (ContentFileStore.isInsideAppData(File(existing), appDataPath) &&
+                !ContentFileStore.isInsideAppData(File(path), appDataPath)
+            ) {
+                meta.paths[sameNameIdx] = path
+                if (meta.selected == existing) meta.selected = path
+                ContentMetadataStore.saveUpdates(appDataPath, baseTid, meta)
+                ContentFileStore.deleteIfInsideAppData(existing, appDataPath)
+                Log.i(TAG, "Relinked update for $baseTid to external path: $displayName")
+                return AssociateResult.Update
+            }
             return AssociateResult.None
         }
+
         meta.paths.add(path)
         val shouldSelect = if (meta.selected.isEmpty()) {
             true
@@ -164,8 +177,22 @@ class ContentAutoloader(
     private fun mergeDlc(titleId: String, containerPath: String, probeJson: String): Boolean {
         val existing = ContentMetadataStore.loadDlc(appDataPath, titleId)
         if (existing.any { it.path == containerPath }) return false
-        // Dedupe by file name as well (migration may have relocated a registered container).
-        if (existing.any { File(it.path).name.equals(File(containerPath).name, ignoreCase = true) }) {
+
+        val sameName = existing.firstOrNull {
+            File(it.path).name.equals(File(containerPath).name, ignoreCase = true)
+        }
+        if (sameName != null) {
+            if (ContentFileStore.isInsideAppData(File(sameName.path), appDataPath) &&
+                !ContentFileStore.isInsideAppData(File(containerPath), appDataPath)
+            ) {
+                val oldPath = sameName.path
+                // NCA paths are inside the package (PFS); only the container file moves.
+                sameName.path = containerPath
+                ContentMetadataStore.saveDlc(appDataPath, titleId, existing)
+                ContentFileStore.deleteIfInsideAppData(oldPath, appDataPath)
+                Log.i(TAG, "Relinked DLC for $titleId to external path: $containerPath")
+                return true
+            }
             return false
         }
 
@@ -189,17 +216,6 @@ class ContentAutoloader(
             Log.e(TAG, "Failed to copy $name for autoload", e)
             null
         }
-    }
-
-    private fun copyFileToDurable(path: String, name: String, durableRoot: File): String? {
-        val source = File(path)
-        val safeName = name.replace(Regex("[^A-Za-z0-9._\\-]"), "_")
-        val destination = File(durableRoot, safeName)
-        if (destination.isFile && destination.length() == source.length()) return destination.absolutePath
-        return runCatching {
-            source.copyTo(destination, overwrite = true)
-            destination.absolutePath
-        }.onFailure { Log.e(TAG, "Failed to copy $name for autoload", it) }.getOrNull()
     }
 
     private fun walkFiles(root: DocumentFile): Sequence<DocumentFile> = sequence {

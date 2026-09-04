@@ -100,7 +100,7 @@ fun DlcDialog(
                 return@launch
             }
             val path = withContext(Dispatchers.IO) {
-                ContentFileStore.copyUri(session, uri, appDataPath, titleId, "dlc", name)
+                ContentFileStore.importUri(context, session, uri, appDataPath, titleId, "dlc", name)
             }
             if (containers.any { it.path == path }) {
                 Toast.makeText(context, "Already added", Toast.LENGTH_SHORT).show()
