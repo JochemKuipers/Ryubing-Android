@@ -3,11 +3,14 @@
 // C ABI implementation for libryubing-nce.
 
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include <android/log.h>
 
 #include "nce.h"
+#include "core.h"
 #include "instructions.h"
 #include "patcher.h"
 
@@ -18,8 +21,31 @@
 namespace {
 
 using Ryubing::Nce::Patcher;
+using Ryubing::Nce::NceCore;
+using Ryubing::Nce::NativeExecutionParameters;
+using Ryubing::Nce::GuestContext;
 using Ryubing::Nce::CodeSegment;
 using Ryubing::Nce::EntryTrampolines;
+
+// Core handle registry (protected by a mutex; cores are per-thread).
+std::mutex g_core_mutex;
+std::unordered_map<int32_t, std::unique_ptr<NceCore>> g_cores;
+int32_t g_next_core_handle = 1;
+
+NceCore* GetCore(int32_t handle) {
+    std::lock_guard lock(g_core_mutex);
+    auto it = g_cores.find(handle);
+    return it != g_cores.end() ? it->second.get() : nullptr;
+}
+
+// The C ABI NceThreadParameters must be layout-compatible with the internal
+// NativeExecutionParameters (see asm_defs.h for the fixed offsets).
+static_assert(offsetof(NceThreadParameters, tpidr_el0) == 0x00);
+static_assert(offsetof(NceThreadParameters, tpidrro_el0) == 0x08);
+static_assert(offsetof(NceThreadParameters, native_context) == 0x10);
+static_assert(offsetof(NceThreadParameters, lock) == 0x18);
+static_assert(offsetof(NceThreadParameters, is_running) == 0x1C);
+static_assert(offsetof(NceThreadParameters, magic) == 0x20);
 
 // Upper bound on patch-section growth per module (generous).
 constexpr uint64_t PatchGrowthEstimate(uint64_t image_size) {
@@ -38,7 +64,7 @@ int32_t nce_get_abi_version(void) {
 }
 
 const char* nce_get_version_string(void) {
-    return "ryubing-nce 0.2.0 (phase 1: patcher)";
+    return "ryubing-nce 0.3.0 (phase 2: signals + core)";
 }
 
 int32_t nce_patch_module(
@@ -160,6 +186,91 @@ int32_t nce_patch_module(
 
     *out_image_size = final_size;
     return 0;
+}
+
+
+// --- Signal handling and core management (phase 2) ---
+
+int32_t nce_initialize(void) {
+    return Ryubing::Nce::InstallSignalHandlers();
+}
+
+int32_t nce_thread_init(void) {
+    return Ryubing::Nce::SetupThreadSignalStack();
+}
+
+int32_t nce_core_create(void) {
+    auto core = std::make_unique<NceCore>();
+    if (core->Initialize() != 0) {
+        LOGE("nce_core_create: Initialize failed");
+        return -1;
+    }
+
+    std::lock_guard lock(g_core_mutex);
+    int32_t handle = g_next_core_handle++;
+    g_cores[handle] = std::move(core);
+    return handle;
+}
+
+void nce_core_destroy(int32_t core_handle) {
+    std::lock_guard lock(g_core_mutex);
+    g_cores.erase(core_handle);
+}
+
+uint64_t nce_run_thread(int32_t core_handle, NceThreadParameters* thread_params,
+                        uint64_t trampoline_addr) {
+    NceCore* core = GetCore(core_handle);
+    if (core == nullptr || thread_params == nullptr) {
+        return static_cast<uint64_t>(Ryubing::Nce::HaltReason::BreakLoop);
+    }
+
+    // The C ABI struct is layout-compatible with NativeExecutionParameters
+    // (verified by static_asserts above).
+    auto* params = reinterpret_cast<Ryubing::Nce::NativeExecutionParameters*>(thread_params);
+    return core->RunThread(params, trampoline_addr);
+}
+
+void nce_signal_interrupt(int32_t core_handle, NceThreadParameters* thread_params) {
+    NceCore* core = GetCore(core_handle);
+    if (core == nullptr || thread_params == nullptr) {
+        return;
+    }
+    auto* params = reinterpret_cast<Ryubing::Nce::NativeExecutionParameters*>(thread_params);
+    core->SignalInterrupt(params);
+}
+
+void nce_get_context(int32_t core_handle, NceGuestContextView* out_view) {
+    NceCore* core = GetCore(core_handle);
+    if (core == nullptr || out_view == nullptr) {
+        return;
+    }
+
+    const auto& ctx = core->GetGuestContext();
+    std::memcpy(out_view->x, ctx.cpu_registers.data(), sizeof(out_view->x));
+    out_view->sp = ctx.sp;
+    out_view->pc = ctx.pc;
+    out_view->pstate = ctx.pstate;
+    out_view->fpcr = ctx.fpcr;
+    out_view->fpsr = ctx.fpsr;
+    out_view->tpidr_el0 = ctx.tpidr_el0;
+    out_view->tpidrro_el0 = ctx.tpidrro_el0;
+}
+
+void nce_set_context(int32_t core_handle, const NceGuestContextView* in_view) {
+    NceCore* core = GetCore(core_handle);
+    if (core == nullptr || in_view == nullptr) {
+        return;
+    }
+
+    auto& ctx = core->GetGuestContext();
+    std::memcpy(ctx.cpu_registers.data(), in_view->x, sizeof(ctx.cpu_registers));
+    ctx.sp = in_view->sp;
+    ctx.pc = in_view->pc;
+    ctx.pstate = in_view->pstate;
+    ctx.fpcr = in_view->fpcr;
+    ctx.fpsr = in_view->fpsr;
+    ctx.tpidr_el0 = in_view->tpidr_el0;
+    ctx.tpidrro_el0 = in_view->tpidrro_el0;
 }
 
 } // extern "C"

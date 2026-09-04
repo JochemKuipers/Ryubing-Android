@@ -41,10 +41,17 @@ endif()
 
 add_library(ryubing-nce SHARED
     nce.cpp
+    core.cpp
+    guest_context.cpp
     patcher.cpp
+    signal_handlers.cpp
+    nce.S
 )
 
 target_include_directories(ryubing-nce PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Enable assembly with C preprocessor (.S files).
+enable_language(ASM)
 
 target_link_libraries(ryubing-nce
     PRIVATE oaknut::oaknut

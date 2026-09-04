@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.InteropServices;
 
 namespace LibRyubing.Nce
@@ -21,6 +22,105 @@ namespace LibRyubing.Nce
 
         [DllImport(Lib, EntryPoint = "nce_get_version_string")]
         internal static extern byte* GetVersionString();
+
+        // --- Halt reasons (must match HaltReason in guest_context.h) ---
+
+        internal const ulong HaltReasonStepThread = 0x00000001;
+        internal const ulong HaltReasonDataAbort = 0x00000004;
+        internal const ulong HaltReasonBreakLoop = 0x02000000;
+        internal const ulong HaltReasonSupervisorCall = 0x04000000;
+        internal const ulong HaltReasonInstructionBreakpoint = 0x08000000;
+        internal const ulong HaltReasonPrefetchAbort = 0x20000000;
+
+        // --- Guest context view (must match NceGuestContextView in nce.h) ---
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal unsafe struct NceGuestContextView
+        {
+            public fixed ulong X[31];   // X0-X30
+            public ulong Sp;
+            public ulong Pc;
+            public uint Pstate;
+            public uint Fpcr;
+            public uint Fpsr;
+            public ulong TpidrEl0;
+            public ulong TpidrroEl0;
+
+            /// <summary>Reads general-purpose register X[index] (0-30).</summary>
+            public ulong GetX(int index) { fixed (ulong* p = X) { return p[index]; } }
+
+            /// <summary>Writes general-purpose register X[index] (0-30).</summary>
+            public void SetX(int index, ulong value) { fixed (ulong* p = X) { p[index] = value; } }
+        }
+
+        // --- Thread parameters (must match NceThreadParameters in nce.h;
+        //     layout is fixed by asm_defs.h — do not reorder) ---
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct NceThreadParameters
+        {
+            public ulong TpidrEl0;      // +0x00
+            public ulong TpidrroEl0;    // +0x08
+            public IntPtr NativeContext; // +0x10 (opaque, set by native side)
+            public uint Lock;           // +0x18 (1=unlocked, 0=locked)
+            public uint IsRunning;      // +0x1C
+            public uint Magic;          // +0x20 (guard value)
+            public uint Pad;            // +0x24
+
+            /// <summary>TLS magic value identifying valid parameters (asm_defs.h).</summary>
+            public const uint TlsMagicValue = 0x555a5559;
+
+            /// <summary>Initializes the parameters with the TLS magic set.</summary>
+            public static NceThreadParameters Create()
+            {
+                return new NceThreadParameters
+                {
+                    Lock = 1, // SpinLockUnlocked
+                    Magic = TlsMagicValue,
+                };
+            }
+        }
+
+        // --- Signal handling and core management (phase 2) ---
+
+        [DllImport(Lib, EntryPoint = "nce_initialize")]
+        internal static extern int Initialize();
+
+        [DllImport(Lib, EntryPoint = "nce_thread_init")]
+        internal static extern int ThreadInit();
+
+        [DllImport(Lib, EntryPoint = "nce_core_create")]
+        internal static extern int CoreCreate();
+
+        [DllImport(Lib, EntryPoint = "nce_core_destroy")]
+        internal static extern void CoreDestroy(int coreHandle);
+
+        [DllImport(Lib, EntryPoint = "nce_run_thread")]
+        internal static extern ulong RunThread(int coreHandle, ref NceThreadParameters threadParams,
+            ulong trampolineAddr);
+
+        [DllImport(Lib, EntryPoint = "nce_signal_interrupt")]
+        internal static extern void SignalInterrupt(int coreHandle, ref NceThreadParameters threadParams);
+
+        [DllImport(Lib, EntryPoint = "nce_get_context")]
+        private static extern void GetContextNative(int coreHandle, ref NceGuestContextView view);
+
+        [DllImport(Lib, EntryPoint = "nce_set_context")]
+        private static extern void SetContextNative(int coreHandle, ref NceGuestContextView view);
+
+        /// <summary>Gets a copy of the core's guest register snapshot.</summary>
+        internal static NceGuestContextView? GetContext(int coreHandle)
+        {
+            NceGuestContextView view = default;
+            GetContextNative(coreHandle, ref view);
+            return view;
+        }
+
+        /// <summary>Sets the core's guest register snapshot (thread must not be running).</summary>
+        internal static void SetContext(int coreHandle, NceGuestContextView view)
+        {
+            SetContextNative(coreHandle, ref view);
+        }
 
         // --- Patch result struct (must match NcePatchResult in nce.h) ---
 

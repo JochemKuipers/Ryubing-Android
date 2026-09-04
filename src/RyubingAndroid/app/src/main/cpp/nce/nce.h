@@ -68,6 +68,70 @@ int32_t nce_patch_module(
     NcePatchResult* out_result
 );
 
+// --- Signal handling and core management (phase 2) ---
+
+// Guest register state snapshot, used to get/set the core's context from
+// managed code. Must not be accessed while the guest thread is running.
+typedef struct NceGuestContextView {
+    uint64_t x[31];        // X0-X30
+    uint64_t sp;
+    uint64_t pc;
+    uint32_t pstate;
+    uint32_t fpcr;
+    uint32_t fpsr;
+    uint64_t tpidr_el0;
+    uint64_t tpidrro_el0;
+} NceGuestContextView;
+
+// Thread parameters placed at a known address; TPIDR_EL0 points here while
+// the guest runs. Layout is fixed by asm_defs.h — do not reorder.
+typedef struct NceThreadParameters {
+    uint64_t tpidr_el0;          // +0x00
+    uint64_t tpidrro_el0;        // +0x08
+    void* native_context;        // +0x10 (opaque, set by the native side)
+    volatile uint32_t lock;      // +0x18 (1=unlocked, 0=locked)
+    volatile uint32_t is_running; // +0x1C (bool)
+    uint32_t magic;              // +0x20 (guard value)
+    uint32_t _pad;               // +0x24 (padding to 8-byte alignment)
+} NceThreadParameters;
+
+// Installs the NCE signal handlers (SIGUSR2, SIGURG, SIGBUS, SIGSEGV) using
+// the real libc sigaction (bypassing the ART signal chain on Android).
+// Call once from any thread before creating cores. Idempotent.
+// Returns 0 on success.
+int32_t nce_initialize(void);
+
+// Sets up the calling thread's alternate signal stack. Call once from each
+// thread that will run guest code (i.e., each emulated CPU core thread).
+// Returns 0 on success.
+int32_t nce_thread_init(void);
+
+// Creates an NCE core bound to the calling thread. Returns a handle (>0),
+// or -1 on failure. The handle is used by nce_run_thread etc. Each core
+// must be created and used from the same thread.
+int32_t nce_core_create(void);
+
+// Destroys a core handle (does not stop a running guest).
+void nce_core_destroy(int32_t core_handle);
+
+// Runs guest code on the core starting from the current guest context.
+// Blocks until the guest exits (SVC, interrupt, or fault). The thread
+// parameters must have been initialized by the caller (magic field set);
+// nce_run_thread fills in the rest.
+//   thread_params: NceThreadParameters owned by the caller (per thread).
+//   trampoline_addr: address of a post-SVC re-entry trampoline (0=default).
+// Returns the halt reason (bit flags; see HaltReason in guest_context.h).
+uint64_t nce_run_thread(int32_t core_handle, NceThreadParameters* thread_params,
+                        uint64_t trampoline_addr);
+
+// Signals the running guest thread on this core to break out of the run
+// loop (SIGURG). Safe to call from another thread.
+void nce_signal_interrupt(int32_t core_handle, NceThreadParameters* thread_params);
+
+// Gets/sets the core's guest register snapshot. Do not call while running.
+void nce_get_context(int32_t core_handle, NceGuestContextView* out_view);
+void nce_set_context(int32_t core_handle, const NceGuestContextView* in_view);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif
