@@ -1,11 +1,32 @@
 package org.ryubing.android.data
 
+import android.content.Context
 import android.net.Uri
 import org.ryubing.android.emu.EmulationSession
 import java.io.File
 import java.io.IOException
 
+/**
+ * Imports update/DLC packages for registration in updates.json / dlc.json.
+ *
+ * Prefers the real filesystem path from [SafPathResolver] so content stays in the
+ * user's folder. Copies into app storage only when the URI has no resolvable path
+ * (the native core needs a durable filesystem path).
+ */
 object ContentFileStore {
+    fun importUri(
+        context: Context,
+        session: EmulationSession,
+        uri: Uri,
+        appDataPath: String,
+        titleId: String,
+        kind: String,
+        displayName: String,
+    ): String {
+        SafPathResolver.resolve(context, uri)?.let { return it }
+        return copyUri(session, uri, appDataPath, titleId, kind, displayName)
+    }
+
     fun copyUri(
         session: EmulationSession,
         uri: Uri,
@@ -23,38 +44,6 @@ object ContentFileStore {
         } finally {
             partial.delete()
         }
-    }
-
-    fun localizeRegisteredContent(appDataPath: String, titleId: String): Boolean {
-        var changed = false
-        val updates = ContentMetadataStore.loadUpdates(appDataPath, titleId)
-        val localizedPaths = updates.paths.map { path ->
-            localizeFile(path, appDataPath, titleId, "updates").also { if (it != path) changed = true }
-        }.toMutableList()
-        val localizedSelected = when {
-            updates.selected.isBlank() -> ""
-            else -> updates.paths.indexOf(updates.selected).takeIf { it >= 0 }
-                ?.let(localizedPaths::get)
-                ?: updates.selected
-        }
-        if (localizedPaths != updates.paths || localizedSelected != updates.selected) {
-            ContentMetadataStore.saveUpdates(
-                appDataPath,
-                titleId,
-                TitleUpdateMetadata(localizedSelected, localizedPaths),
-            )
-        }
-
-        val dlc = ContentMetadataStore.loadDlc(appDataPath, titleId)
-        dlc.forEach { container ->
-            val localized = localizeFile(container.path, appDataPath, titleId, "dlc")
-            if (localized != container.path) {
-                container.path = localized
-                changed = true
-            }
-        }
-        if (changed) ContentMetadataStore.saveDlc(appDataPath, titleId, dlc)
-        return changed
     }
 
     fun copyFile(
@@ -85,11 +74,16 @@ object ContentFileStore {
         }
     }
 
-    private fun localizeFile(path: String, appDataPath: String, titleId: String, kind: String): String {
-        if (path.isBlank()) return path
-        val source = File(path)
-        if (!source.isFile || isInside(source, File(appDataPath))) return path
-        return copyFile(path, appDataPath, titleId, kind, source.name)
+    /** True when [file] lives under [directory] (e.g. a previous app-storage copy). */
+    fun isInsideAppData(file: File, appDataPath: String): Boolean =
+        isInside(file, File(appDataPath))
+
+    fun deleteIfInsideAppData(path: String, appDataPath: String) {
+        if (path.isBlank()) return
+        val file = File(path)
+        if (isInsideAppData(file, appDataPath) && file.isFile) {
+            file.delete()
+        }
     }
 
     private fun destination(

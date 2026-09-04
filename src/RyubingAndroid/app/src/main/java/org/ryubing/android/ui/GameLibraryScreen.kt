@@ -55,7 +55,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.ryubing.android.R
-import org.ryubing.android.data.ContentFileStore
 import org.ryubing.android.data.ContentAutoloader
 import org.ryubing.android.data.GameEntry
 import org.ryubing.android.data.GameRepository
@@ -118,6 +117,9 @@ fun GameLibraryScreen(
                                 ).show()
                             }
                         } else {
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(context, "Autoloading updates/DLC…", Toast.LENGTH_SHORT).show()
+                            }
                             val (updates, dlc) = ContentAutoloader(context, appDataPath, session)
                                 .autoload(settings.updatesFolderUri, enriched)
                             if (updates > 0 || dlc > 0) {
@@ -130,17 +132,6 @@ fun GameLibraryScreen(
                                 }
                             }
                         }
-                    }
-
-                    // Best-effort: move update/DLC content registered on shared (FUSE)
-                    // storage into app-private storage so the core reads it without
-                    // per-page FUSE overhead during play.
-                    enriched.forEach { game ->
-                        if (game.titleId.isBlank()) return@forEach
-                        runCatching { ContentFileStore.localizeRegisteredContent(appDataPath, game.titleId) }
-                            .onFailure {
-                                android.util.Log.w("GameLibrary", "Content migration failed for ${game.title}", it)
-                            }
                     }
 
                     // Publish update/DLC counts first (no native probing) so autoloaded

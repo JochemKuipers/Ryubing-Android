@@ -74,7 +74,7 @@ fun TitleUpdateDialog(
                 return@launch
             }
             val path = withContext(Dispatchers.IO) {
-                ContentFileStore.copyUri(session, uri, appDataPath, titleId, "updates", name)
+                ContentFileStore.importUri(context, session, uri, appDataPath, titleId, "updates", name)
             }
             if (path in metadata.paths) {
                 Toast.makeText(context, "Already added", Toast.LENGTH_SHORT).show()
