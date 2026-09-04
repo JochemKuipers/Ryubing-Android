@@ -366,6 +366,9 @@ fun GameLibraryScreen(
             gameTitle = game.title,
             appDataPath = appDataPath,
             session = session,
+            titleNamesById = games
+                .filter { it.titleId.isNotBlank() }
+                .associate { it.titleId.lowercase() to it.title },
             onDismiss = { manageSavesFor = null },
         )
     }

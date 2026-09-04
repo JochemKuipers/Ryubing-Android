@@ -190,6 +190,14 @@ namespace LibRyubing
             return saveId;
         }
 
+        [UnmanagedCallersOnly(EntryPoint = "ryubing_ensure_user_save_id")]
+        public static ulong EnsureUserSaveId(ulong titleId)
+        {
+            ulong saveId = 0;
+            Guard(() => saveId = AndroidHost.EnsureUserSaveId(titleId));
+            return saveId;
+        }
+
         // --- System files ---
 
         [UnmanagedCallersOnly(EntryPoint = "ryubing_reload_keys")]

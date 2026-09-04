@@ -1,9 +1,13 @@
 using LibRyubing.Input;
 using LibRyubing.Platform;
 using OpenTK.Audio.OpenAL;
+using LibHac.Account;
 using LibHac.Common;
 using LibHac.Fs;
 using LibHac.Fs.Shim;
+using LibHac.Ncm;
+using LibHac.Ns;
+using ApplicationId = LibHac.Ncm.ApplicationId;
 using Ryujinx.Audio.Backends.OpenAL;
 using Ryujinx.Audio.Integration;
 using Ryujinx.Common;
@@ -162,18 +166,71 @@ namespace LibRyubing
                 return 0;
             }
 
-            SaveDataFilter filter = SaveDataFilter.Make(
-                titleId,
-                SaveDataType.Account,
-                _accountManager.LastOpenedUser.UserId.ToLibHac(),
-                saveDataId: default,
-                index: default);
+            SaveDataFilter filter = MakeAccountSaveFilter(titleId);
             LibHac.Result result = _libHacHorizonManager.RyujinxClient.Fs.FindSaveDataWithFilter(
                 out SaveDataInfo info,
                 SaveDataSpaceId.User,
                 in filter);
             return result.IsSuccess() ? info.SaveDataId : 0;
         }
+
+        /// <summary>
+        /// Returns the account-save ID for a title, creating it via LibHac when missing
+        /// (same path as desktop Open User Save Directory).
+        /// </summary>
+        public static ulong EnsureUserSaveId(ulong titleId)
+        {
+            if (_libHacHorizonManager == null || _accountManager == null)
+            {
+                return 0;
+            }
+
+            SaveDataFilter filter = MakeAccountSaveFilter(titleId);
+            var fs = _libHacHorizonManager.RyujinxClient.Fs;
+            LibHac.Result result = fs.FindSaveDataWithFilter(out SaveDataInfo info, SaveDataSpaceId.User, in filter);
+
+            if (ResultFs.TargetNotFound.Includes(result))
+            {
+                Logger.Info?.Print(LogClass.Application, $"Creating save directory for title [{titleId:x16}]");
+
+                BlitStruct<ApplicationControlProperty> controlHolder = new(1);
+                ref ApplicationControlProperty control = ref controlHolder.Value;
+                // Sizes only need to be non-zero for directory savedata (matches desktop).
+                control.UserAccountSaveDataSize = 0x4000;
+                control.UserAccountSaveDataJournalSize = 0x4000;
+                control.SaveDataOwnerId = titleId;
+
+                Uid user = _accountManager.LastOpenedUser.UserId.ToLibHacUid();
+                result = fs.EnsureApplicationSaveData(out _, new ApplicationId(titleId), in control, in user);
+                if (result.IsFailure())
+                {
+                    Logger.Error?.Print(
+                        LogClass.Application,
+                        $"EnsureApplicationSaveData failed: {result.ToStringWithName()}");
+                    return 0;
+                }
+
+                result = fs.FindSaveDataWithFilter(out info, SaveDataSpaceId.User, in filter);
+            }
+
+            if (result.IsFailure())
+            {
+                Logger.Error?.Print(
+                    LogClass.Application,
+                    $"FindSaveDataWithFilter failed: {result.ToStringWithName()}");
+                return 0;
+            }
+
+            return info.SaveDataId;
+        }
+
+        private static SaveDataFilter MakeAccountSaveFilter(ulong titleId) =>
+            SaveDataFilter.Make(
+                titleId,
+                SaveDataType.Account,
+                _accountManager.LastOpenedUser.UserId.ToLibHac(),
+                saveDataId: default,
+                index: default);
 
         /// <summary>
         /// Installs a firmware package into system storage. <paramref name="path"/> must be a real

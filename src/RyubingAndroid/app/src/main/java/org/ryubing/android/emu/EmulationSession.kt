@@ -251,6 +251,20 @@ class EmulationSession(
             ?.padStart(16, '0')
     }
 
+    /**
+     * Returns the account-save ID for [titleIdHex], creating the LibHac save entry when missing
+     * (same as desktop Open User Save Directory).
+     */
+    fun ensureUserSaveId(titleIdHex: String): String? {
+        val titleId = titleIdHex.toULongOrNull(16) ?: return null
+        initialize()
+        return RyubingNative.core.ryubing_ensure_user_save_id(titleId.toLong())
+            .toULong()
+            .takeIf { it != 0uL }
+            ?.toString(16)
+            ?.padStart(16, '0')
+    }
+
     // --- Hotkeys ---
 
     fun performHotkey(action: HotkeyAction) {
