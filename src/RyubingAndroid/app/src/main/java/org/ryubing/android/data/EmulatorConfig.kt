@@ -67,7 +67,6 @@ data class EmulatorConfig(
     val hudShowCpuBackend: Boolean = true,
     val hudShowMemory: Boolean = true,
     val hudShowGpu: Boolean = true,
-    val hudShowPresentedFrames: Boolean = true,
     /** When true, face buttons follow Switch layout (recommended for Nintendo titles). */
     val useSwitchLayout: Boolean = true,
     val showTouchControls: Boolean = true,

@@ -362,9 +362,6 @@ private fun GraphicsSettingsPage(config: EmulatorConfig, update: (EmulatorConfig
         SwitchRow("GPU backend", config.hudShowGpu) {
             update(config.copy(hudShowGpu = it))
         }
-        SwitchRow("Presented frames", config.hudShowPresentedFrames) {
-            update(config.copy(hudShowPresentedFrames = it))
-        }
     }
     HorizontalDivider(Modifier.padding(vertical = 12.dp))
     DropdownRow(

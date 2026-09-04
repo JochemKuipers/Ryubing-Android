@@ -95,13 +95,11 @@ namespace LibRyubing
             out double gameFps,
             out double frameTimeMs,
             out double fifoPercent,
-            out long presentedFrames,
             out bool usingNce)
         {
             gameFps = 0;
             frameTimeMs = 0;
             fifoPercent = 0;
-            presentedFrames = Interlocked.Read(ref _presentedFrames);
             usingNce = _usingNce;
 
             Switch device = _device;

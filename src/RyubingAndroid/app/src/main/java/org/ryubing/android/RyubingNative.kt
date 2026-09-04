@@ -68,7 +68,6 @@ object RyubingNative {
             gameFps: com.sun.jna.ptr.DoubleByReference,
             frameTimeMs: com.sun.jna.ptr.DoubleByReference,
             fifoPercent: com.sun.jna.ptr.DoubleByReference,
-            presentedFrames: com.sun.jna.ptr.LongByReference,
             usingNce: com.sun.jna.ptr.IntByReference,
         ): Int
         fun ryubing_query_application_info(path: String, displayName: String, outJsonPath: String): Int

@@ -58,7 +58,6 @@ class SettingsRepository(private val context: Context) {
         hudShowCpuBackend = prefs.getBoolean(KEY_HUD_SHOW_CPU, true),
         hudShowMemory = prefs.getBoolean(KEY_HUD_SHOW_MEMORY, true),
         hudShowGpu = prefs.getBoolean(KEY_HUD_SHOW_GPU, true),
-        hudShowPresentedFrames = prefs.getBoolean(KEY_HUD_SHOW_FRAMES, true),
         useSwitchLayout = prefs.getBoolean(KEY_SWITCH_LAYOUT, true),
         showTouchControls = prefs.getBoolean(KEY_TOUCH_CONTROLS, true),
         touchControlsScale = prefs.getFloat(KEY_TOUCH_SCALE, 1f).coerceIn(0.5f, 1.5f),
@@ -117,7 +116,6 @@ class SettingsRepository(private val context: Context) {
         putBoolean(KEY_HUD_SHOW_CPU, config.hudShowCpuBackend)
         putBoolean(KEY_HUD_SHOW_MEMORY, config.hudShowMemory)
         putBoolean(KEY_HUD_SHOW_GPU, config.hudShowGpu)
-        putBoolean(KEY_HUD_SHOW_FRAMES, config.hudShowPresentedFrames)
         putBoolean(KEY_SWITCH_LAYOUT, config.useSwitchLayout)
         putBoolean(KEY_TOUCH_CONTROLS, config.showTouchControls)
         putFloat(KEY_TOUCH_SCALE, config.touchControlsScale)
@@ -184,7 +182,6 @@ class SettingsRepository(private val context: Context) {
         const val KEY_HUD_SHOW_CPU = "hud_show_cpu"
         const val KEY_HUD_SHOW_MEMORY = "hud_show_memory"
         const val KEY_HUD_SHOW_GPU = "hud_show_gpu"
-        const val KEY_HUD_SHOW_FRAMES = "hud_show_frames"
         const val KEY_SWITCH_LAYOUT = "switch_layout"
         const val KEY_TOUCH_CONTROLS = "touch_controls"
         const val KEY_TOUCH_SCALE = "touch_scale"

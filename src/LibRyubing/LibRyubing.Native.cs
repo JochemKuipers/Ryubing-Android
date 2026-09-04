@@ -165,14 +165,12 @@ namespace LibRyubing
             double* gameFps,
             double* frameTimeMs,
             double* fifoPercent,
-            long* presentedFrames,
             int* usingNce)
         {
             if (!AndroidHost.TryGetPerformanceStats(
                     out double fps,
                     out double ft,
                     out double fifo,
-                    out long presented,
                     out bool nce))
             {
                 return 0;
@@ -191,11 +189,6 @@ namespace LibRyubing
             if (fifoPercent != null)
             {
                 *fifoPercent = fifo;
-            }
-
-            if (presentedFrames != null)
-            {
-                *presentedFrames = presented;
             }
 
             if (usingNce != null)

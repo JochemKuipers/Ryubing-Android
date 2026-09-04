@@ -40,7 +40,6 @@ int ryubing_get_performance_stats(
     double *gameFps,
     double *frameTimeMs,
     double *fifoPercent,
-    int64_t *presentedFrames,
     int *usingNce);
 void ryubing_reload_keys();
 int ryubing_install_firmware(const char *path);

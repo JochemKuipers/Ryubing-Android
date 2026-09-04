@@ -20,7 +20,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sun.jna.ptr.DoubleByReference
 import com.sun.jna.ptr.IntByReference
-import com.sun.jna.ptr.LongByReference
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.ryubing.android.RyubingNative
@@ -46,12 +45,10 @@ fun PerformanceHud(
         config.hudShowCpuBackend,
         config.hudShowMemory,
         config.hudShowGpu,
-        config.hudShowPresentedFrames,
     ) {
         val gameFps = DoubleByReference()
         val frameTimeMs = DoubleByReference()
         val fifoPercent = DoubleByReference()
-        val presentedFrames = LongByReference()
         val usingNce = IntByReference()
 
         while (isActive) {
@@ -60,7 +57,6 @@ fun PerformanceHud(
                     gameFps,
                     frameTimeMs,
                     fifoPercent,
-                    presentedFrames,
                     usingNce,
                 ) != 0
             } catch (_: Throwable) {
@@ -92,9 +88,6 @@ fun PerformanceHud(
                 if (config.hudShowGpu) {
                     parts += "Vulkan"
                 }
-                if (config.hudShowPresentedFrames) {
-                    parts += "frames ${presentedFrames.value}"
-                }
             } else if (config.hudShowFps) {
                 parts += "— FPS"
             }
@@ -123,4 +116,4 @@ fun PerformanceHud(
 
 private val EmulatorConfig.anyHudStatEnabled: Boolean
     get() = hudShowFps || hudShowFrameTime || hudShowFifo || hudShowCpuBackend ||
-        hudShowMemory || hudShowGpu || hudShowPresentedFrames
+        hudShowMemory || hudShowGpu
