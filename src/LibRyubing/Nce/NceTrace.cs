@@ -107,10 +107,11 @@ namespace LibRyubing.Nce
         /// <param name="key">Argument that identifies "the same" call (e.g. queried address)</param>
         public bool Observe(uint svc, ulong key)
         {
-            if (IsArgumentless(svc))
+            if (IsArgumentless(svc) || IsWaitLike(svc))
             {
-                // X0 is not an input for these, so "same key" is meaningless: nn::os
-                // legitimately calls GetCurrentProcessorNumber / GetSystemTick in tight loops.
+                // X0 is not an input for argumentless SVCs; wait/sleep SVCs
+                // legitimately repeat with a stable handle while the guest blocks
+                // (Celeste/Hades main-thread WaitSynchronization storms are vsync, not bugs).
                 Reset();
                 return false;
             }
@@ -137,6 +138,20 @@ namespace LibRyubing.Nce
             return svc == 0x10 // GetCurrentProcessorNumber
                 || svc == 0x1E // GetSystemTick
                 || svc == 0x03; // ExitProcess
+        }
+
+        /// <summary>
+        /// SVCs that legitimately repeat with a stable key while the guest waits
+        /// (vsync / mutex / sleep). Not a QueryMemory-style storm.
+        /// </summary>
+        public static bool IsWaitLike(uint svc)
+        {
+            return svc == 0x0B // SleepThread
+                || svc == 0x18 // WaitSynchronization
+                || svc == 0x1B // ArbitrateLock
+                || svc == 0x1C // ArbitrateUnlock
+                || svc == 0x1D // WaitProcessWideKeyAtomic
+                || svc == 0x21; // SignalProcessWideKey / wait-family (Celeste vsync path)
         }
 
         public void Reset()

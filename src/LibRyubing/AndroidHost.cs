@@ -501,6 +501,8 @@ namespace LibRyubing
                                     long presented = Interlocked.Increment(ref _presentedFrames);
                                     if (presented == 1 || presented == 60 || presented == 600)
                                     {
+                                        Logger.Notice.Print(LogClass.Gpu,
+                                            $"BOOT|PRESENT frames={presented} uptimeMs={Environment.TickCount64 - _bootStartTicks}");
                                         Logger.Info?.Print(LogClass.Gpu,
                                             $"BOOT|PRESENT frames={presented} uptimeMs={Environment.TickCount64 - _bootStartTicks}");
                                     }

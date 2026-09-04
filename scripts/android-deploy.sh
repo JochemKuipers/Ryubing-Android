@@ -324,6 +324,8 @@ _nce_hex_field() {
 
 # Write/print the triage report for a smoke capture. Sets _NCE_VERDICT / _NCE_EXIT.
 nce_write_triage() {
+    # Many greps are piped to head; don't let SIGPIPE abort the whole triage under pipefail.
+    set +o pipefail
     local raw="$1"
     local triage="$2"
     local filtered="${3:-}"
@@ -471,9 +473,16 @@ nce_write_triage() {
     else
         invariants+=("FAULT     ok    none")
     fi
-    if (( storm_n > 0 )); then
-        invariants+=("STORM     FAIL  $(grep -E 'NCE\|STORM' "$raw" | head -n1 | sed -E 's/.*NCE\|STORM //')")
+    # Wait/sleep SVCs (0xB SleepThread, 0x18 WaitSynchronization, 0x1B–0x1D / 0x21
+    # process-wide key) legitimately repeat under vsync; only QueryMemory-style
+    # storms (and unknown SVCs) fail the triage.
+    local storm_bad
+    storm_bad="$(grep -E 'NCE\|STORM svc=0x' "$raw" 2>/dev/null | grep -Ev 'svc=0x(B|18|1[BCD]|21) ' | head -n1 || true)"
+    if [[ -n "$storm_bad" ]]; then
+        invariants+=("STORM     FAIL  $(echo "$storm_bad" | sed -E 's/.*NCE\|STORM //')")
         failures+=("SVC storm")
+    elif (( storm_n > 0 )); then
+        invariants+=("STORM     ok    wait-like only (ignored: SleepThread/WaitSynchronization/…)")
     else
         invariants+=("STORM     ok    none")
     fi
@@ -590,6 +599,7 @@ nce_write_triage() {
     rm -f "$nost"
     _NCE_VERDICT="$verdict"
     _NCE_EXIT="$exit_code"
+    set -o pipefail
 }
 
 cmd_launch_title() {

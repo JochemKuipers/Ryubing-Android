@@ -173,15 +173,20 @@ bool nce_handle_guest_access_fault(Ryubing::Nce::GuestContext* guest_ctx, void* 
         const int is_write = ExtractIsWrite(raw_context);
         if (handler(guest_va, PageSize, is_write) != 0) {
             // Detect infinite soft-fault retry loops (handler claims handled but the
-            // page stays inaccessible): same PC faulting over and over.
+            // page stays inaccessible). Key on (pc, page): a guest memcpy walking
+            // through many tracking-protected pages legitimately faults at the same
+            // PC with a new address each time — that must not DataAbort (Celeste /
+            // Hades loading screens were dying here while audio kept playing).
             static std::atomic<uint64_t> s_last_pc{0};
-            static std::atomic<uint32_t> s_same_pc{0};
-            const uint64_t prev = s_last_pc.exchange(host_ctx.pc, std::memory_order_relaxed);
+            static std::atomic<uint64_t> s_last_page{0};
+            static std::atomic<uint32_t> s_same{0};
+            const uint64_t prev_pc = s_last_pc.exchange(host_ctx.pc, std::memory_order_relaxed);
+            const uint64_t prev_page = s_last_page.exchange(guest_va, std::memory_order_relaxed);
             uint32_t streak = 1;
-            if (prev == host_ctx.pc) {
-                streak = s_same_pc.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (prev_pc == host_ctx.pc && prev_page == guest_va) {
+                streak = s_same.fetch_add(1, std::memory_order_relaxed) + 1;
             } else {
-                s_same_pc.store(1, std::memory_order_relaxed);
+                s_same.store(1, std::memory_order_relaxed);
             }
             if (streak >= 64 && (streak == 64 || streak == 1024 || (streak % 4096) == 0)) {
                 NCE_LOG_ERROR("NCE|FAULT storm pc=0x%llx addr=0x%llx count=%u action=DataAbort",

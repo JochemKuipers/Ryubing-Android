@@ -137,6 +137,12 @@ namespace LibRyubing.Tests
             Assert.Equal(0, d.Streak);
             Assert.True(NceStormDetector.IsArgumentless(0x10));
             Assert.False(NceStormDetector.IsArgumentless(0x06)); // QueryMemory
+            Assert.True(NceStormDetector.IsWaitLike(0x18));
+            Assert.True(NceStormDetector.IsWaitLike(0x21));
+            for (int i = 0; i < 200; i++)
+            {
+                Assert.False(d.Observe(0x21, 0xA0010));
+            }
         }
     }
 }
