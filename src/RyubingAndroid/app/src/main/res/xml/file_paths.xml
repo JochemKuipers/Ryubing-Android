@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="internal" path="." />
+    <external-files-path name="android_data" path="." />
+    <!-- Custom data folders can live anywhere; app already holds All Files Access. -->
+    <root-path name="root" path="." />
+</paths>

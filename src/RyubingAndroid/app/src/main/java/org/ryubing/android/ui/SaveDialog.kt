@@ -1,5 +1,11 @@
 package org.ryubing.android.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,6 +36,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -191,6 +199,10 @@ fun SaveDialog(
                     ) { Text("Restore") }
                 }
                 if (save != null) {
+                    TextButton(
+                        enabled = !busy,
+                        onClick = { openSaveFolder(context, save!!.directory) },
+                    ) { Text("Open folder") }
                     TextButton(enabled = !busy, onClick = { confirmClear = true }) { Text("Clear save") }
                 }
             }
@@ -284,6 +296,82 @@ fun SaveDialog(
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
         )
     }
+}
+
+/** Opens the committed save folder (same target as desktop Open User Save Directory). */
+private fun openSaveFolder(context: Context, saveRoot: File) {
+    val target = resolveOpenTarget(saveRoot)
+    if (!target.exists() && !target.mkdirs()) {
+        Toast.makeText(context, "Could not create save folder", Toast.LENGTH_LONG).show()
+        return
+    }
+
+    val intents = buildList {
+        documentsUriFor(target)?.let { uri ->
+            add(
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+        }
+        runCatching {
+            FileProvider.getUriForFile(context, "${context.packageName}.files", target)
+        }.getOrNull()?.let { uri ->
+            add(
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+        }
+    }
+
+    for (intent in intents) {
+        try {
+            if (intent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(Intent.createChooser(intent, null))
+                return
+            }
+        } catch (_: Exception) {
+            // try the next candidate
+        }
+    }
+
+    val clipboard = context.getSystemService(ClipboardManager::class.java)
+    clipboard?.setPrimaryClip(ClipData.newPlainText("Save folder", target.absolutePath))
+    Toast.makeText(
+        context,
+        "Path copied to clipboard:\n${target.absolutePath}",
+        Toast.LENGTH_LONG,
+    ).show()
+}
+
+private fun resolveOpenTarget(saveRoot: File): File {
+    val committed = File(saveRoot, "0")
+    val working = File(saveRoot, "1")
+    return when {
+        committed.isDirectory -> committed
+        working.isDirectory -> working
+        else -> committed
+    }
+}
+
+private fun documentsUriFor(file: File): Uri? {
+    val path = file.absolutePath
+    val prefixes = listOf(
+        "/storage/emulated/0/" to "primary",
+        "/sdcard/" to "primary",
+    )
+    for ((prefix, volume) in prefixes) {
+        if (!path.startsWith(prefix)) continue
+        val rel = path.removePrefix(prefix)
+        return DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents",
+            "$volume:$rel",
+        )
+    }
+    return null
 }
 
 private fun formatBytes(bytes: Long): String = when {
